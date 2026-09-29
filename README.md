@@ -9,9 +9,18 @@ public and read-only.
 | Stage | What | Status |
 |---|---|---|
 | 1 | Live data (Gamma discovery, CLOB order books, Coinbase, Chainlink) + fair value next to the book | **done** (`watch`) |
-| 2 | Signals: ask below fair value by more than fee + slippage + buffer | next |
-| 3 | Simulated taker fills: latency, book walking, fees, zero-fee shadow P&L, settlement | |
-| 4 | `report`: win rate, P&L, fees, edge at entry vs realized, drawdown, 95% CI | |
+| 2 | Signals: ask below fair value by more than fee + slippage + buffer | **done** (`run`) |
+| 3 | Simulated taker fills: latency, book walking, fees, zero-fee shadow P&L, settlement | **done** (`run`) |
+| 4 | `report`: win rate, P&L, fees, edge at entry vs realized, drawdown, 95% CI | **done** (`report`) |
+
+Monitoring dashboard (`--dashboard`):
+
+| Stage | What | Status |
+|---|---|---|
+| 1 | Server + WebSocket, header, ticker strip, wallet card, execution log, stale handling | **done** |
+| 2 | BTC candle chart, order book ladder | next |
+| 3 | Signal map, equity curve, trades table, streak card | |
+| 4 | Analytics histograms, footer polish, `dashboard --replay` | |
 
 ## Setup
 
@@ -19,7 +28,7 @@ Python 3.11+.
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt          # just aiohttp
+pip install -r requirements.txt          # aiohttp, fastapi, uvicorn, websockets
 ```
 
 All settings live in `config.toml`. There are no secrets to configure.
@@ -82,8 +91,97 @@ windows, random websocket drops):
 
 ```bash
 python -m tests.fake_exchange --port 8765 --drop-every 20 &
-python -m polybot --config tests/fake_config.toml watch
+python -m polybot --config tests/fake_config.toml run --dashboard
 ```
+
+The fake market reprices a little slowly, so the paper engine finds
+"edges" there. Its P&L means nothing; it only exercises the pipeline. The
+dashboard shows a **TEST** badge whenever the endpoints aren't Polymarket's
+production hosts. `curl "localhost:8765/admin/pause?feed=coinbase&seconds=15"`
+stalls one feed to check the STALE handling.
+
+## Paper trading (`run`)
+
+```bash
+python -m polybot run               # add --dashboard for the web dashboard
+python -m polybot report            # stats from the database, any time
+```
+
+`run` does everything `watch` does, plus the simulated strategy. It prints a
+one-line status every 60 s (bankroll, open positions, trades today, net P&L
+today with the zero-fee number next to it). **No order is ever sent
+anywhere.** The engine only reads the local copy of the public order book.
+
+On each Coinbase update, for each live window and each side (Up/Down):
+
+1. **Fair value** `p = Φ(ln(S/S0) / (σ·√τ))` (see Stage 1).
+2. **Signal** when `fair − VWAP − fee/share − slippage_allowance > safety_buffer`.
+   VWAP is the average price of walking the asks for the intended size, so
+   book-walk slippage counts against the edge. `safety_buffer` defaults to
+   1¢. No new entries in the last `min_seconds_remaining` (10 s).
+3. **Latency.** The order "arrives" `sim.latency_ms` (300 ms) later and fills
+   against the book **as it looks then**. The order limit is the signal ask
+   plus `max_slippage`. If the ask moved up, `adverse_move = "take"` pays the
+   worse price (up to the limit); `"skip"` drops the trade.
+4. **Honest fills.** The fill never takes more than the displayed depth.
+   Size we already "took" at a price stays hidden from later paper fills for
+   `liquidity_memory_s`, because our fills don't really remove liquidity.
+   Fees are charged per matched level, rounded as documented. Order sizes
+   respect `max_trade_usd`, `max_window_usd`, available paper cash, and the
+   market's minimum order size.
+5. **Settlement.** Positions are held to resolution. Each is settled from
+   Polymarket's posted outcome (Gamma, polled after the window closes).
+   Until that's posted, the position shows `PENDING`, and it's settled
+   later, even across restarts. Every trade also carries a zero-fee shadow
+   P&L (same trades, no fees) so you can see exactly what fees cost.
+
+Every evaluated opportunity is logged to `signals`: signals taken, and
+skips with their reason, throttled to one per window/side every 5 s. Every
+fill and settlement goes to `trades`, and every log line to `exec_log`.
+
+`report` prints trade count, win rate, gross P&L, total fees, net P&L,
+zero-fee P&L, average edge at entry vs. realized (¢/share), max drawdown,
+profit factor, and a 95% t-interval on average P&L per trade.
+
+## Dashboard (`--dashboard`)
+
+```bash
+python -m polybot run --dashboard   # then open http://127.0.0.1:8787
+```
+
+A read-only web terminal served from inside the bot's own event loop
+(FastAPI + uvicorn). It has no buttons that trade or change settings, and
+messages sent to its WebSocket are ignored. The account is always labelled
+**PAPER**.
+
+- **iPad / other devices:** set `dashboard_host = "0.0.0.0"` under
+  `[dashboard]` in `config.toml`, then open `http://<your computer's LAN
+  IP>:8787`. Anyone on your wifi can view it (not change it). Your OS
+  firewall may ask to allow incoming connections.
+- **Offline:** the page, chart library (TradingView lightweight-charts,
+  Apache-2.0) and font (JetBrains Mono, OFL) are all served locally from
+  `polybot/dashboard/static/`.
+- **Protocol:** one WebSocket at `/ws`. It sends a full snapshot on connect,
+  then prices and books at `tick_hz` (4/s), plus trades, signals and log
+  lines the moment they happen. `/api/snapshot` returns the same snapshot as
+  JSON.
+- **Every number comes from the bot.** There is no sample or animation data.
+  If a feed is quiet for more than `stale_after_s` (3 s), everything that
+  depends on it greys out and is labelled `STALE`. If the dashboard loses
+  its connection to the bot, everything greys out and a banner says so.
+  Feed dots show ms since each feed's last message. Gamma is a REST API, so
+  it's polled every `markets.gamma_heartbeat_s` (2 s) to keep its dot
+  meaningful.
+- **Header:** net P&L today is the headline; the zero-fee number sits
+  smaller next to it. "Today" means your `dashboard.timezone`
+  (America/Chicago by default).
+- Click the market name to switch between the 15m and 5m markets. Click a
+  log tag to filter the log. Hover the log to pause auto-scroll (on an iPad,
+  tap it).
+
+Screenshots for layout checks: `python tools/screenshot.py http://127.0.0.1:8787 shots/`
+(needs `pip install playwright`). It captures 1440×900 and 1180×820, and
+reports anything that overflows or scrolls.
 
 ## What was verified against the docs, and what changed from the original spec
 
@@ -142,8 +240,15 @@ Everything goes to SQLite (`data/paperbot.sqlite`) and a rotating log
 - `markets`: every window seen, including full description, fee parameters
   and source, rules check, Chainlink/Coinbase start and end prices, our
   predicted outcome, and Polymarket's posted resolution.
-- `fv_snapshots`: fair value, inputs and top of book every 5 s per live
-  window (roughly 5 MB/day).
+- `signals`: every evaluated opportunity, including fair value, ask, VWAP,
+  fee, edges, size, and decision (filled/skipped + reason).
+- `trades`: every paper fill, including the levels it walked, fee, edge at
+  entry, status (OPEN/PENDING/WON/LOST), and P&L with the zero-fee shadow.
+- `exec_log`: every execution-log line shown on the dashboard.
+- `snapshots_1s`: once a second per series: spot, Chainlink, basis, σ, S0,
+  fair value, top of book, plus a compressed 5-level ladder and feed ages
+  (this drives replay; roughly 25–50 MB/day).
+- `candles_1m`: 1-minute BTC candles built from Coinbase ticks.
 - `events`: warnings, discovery failures, fee/rules notes, and oracle
   mismatches.
 
@@ -167,7 +272,7 @@ sqlite3 data/paperbot.sqlite "SELECT slug, s0_chainlink, end_chainlink, chainlin
 
   [Service]
   WorkingDirectory=%h/tarderz
-  ExecStart=%h/tarderz/.venv/bin/python -m polybot watch
+  ExecStart=%h/tarderz/.venv/bin/python -m polybot run --dashboard
   Restart=always
   RestartSec=10
 
@@ -176,7 +281,7 @@ sqlite3 data/paperbot.sqlite "SELECT slug, s0_chainlink, end_chainlink, chainlin
   ```
 
   Then run `systemctl --user enable --now polybot` and `loginctl
-  enable-linger $USER`. (From stage 3 on, the command becomes `run`.)
+  enable-linger $USER`.
 - Restarts are safe. State lives in SQLite, and any window that closed while
   the bot was down is re-polled on startup until Polymarket posts its
   resolution. After a restart, the window in progress is skipped (its start
@@ -197,10 +302,20 @@ python -m pytest -q
 
 Unit tests cover fees, fair value, the vol and basis estimators, book
 maintenance, message parsing (in the documented payload shapes) and
-resolution parsing. `tests/test_integration.py` runs the real app for about
-30 s against the fake exchange, with 6 s/12 s windows and forced websocket
-drops. It checks reconnects, rollover, boundary prices, resolutions and
-snapshots end-to-end.
+resolution parsing. `tests/test_engine.py` pins down the fill rules:
+- the fill uses the post-latency book
+- it respects depth, limit and budget
+- liquidity we already took stays hidden
+- it follows the adverse-move policy
+
+It also checks the skip reasons, the window cap, settlement, the zero-fee
+math and the statistics.
+
+`tests/test_integration.py` runs the real app in `run` mode, with the
+dashboard, for about 30 s against the fake exchange. It uses 6 s/12 s
+windows and forced websocket drops. It checks reconnects, rollover, boundary
+prices, resolutions, paper P&L consistency, the dashboard protocol (snapshot
+first, then ~4 ticks/s), and that shutdown takes under 4 s.
 
 ## Known limitations / open questions
 

@@ -20,6 +20,7 @@ coinbase_rest = "https://api.exchange.coinbase.com"    # 1-minute candles for vo
 discover_ahead_s = 120          # look up the next window this long before rollover
 discover_retry_s = 5
 unsubscribe_after_end_s = 20
+gamma_heartbeat_s = 2           # light poll of the live market on Gamma (feeds the Gamma status dot)
 # Never trade a window unless its description contains all of these:
 required_description_terms = ["Chainlink", "greater than or equal"]
 
@@ -80,6 +81,38 @@ fixed_exponent = 1.0
 round_decimals = 5
 buy_fee_in = "collateral"       # V2 SDKs charge the buy fee in pUSD on top of notional
 
+[strategy]
+# Signal when the ask is below fair value by more than taker fee + slippage + buffer:
+#   fair - VWAP(order size) - fee/share - slippage_allowance > safety_buffer
+safety_buffer = 0.01            # $ per share (1 cent)
+slippage_allowance = 0.0        # extra $/share on top of the book-walk slippage
+min_seconds_remaining = 10      # no new entries in the last N seconds of a window
+skip_log_interval_s = 5         # log at most one skipped opportunity per window+side this often
+
+[sim]
+starting_bankroll = 100.0
+latency_ms = 300                # signal -> fill delay; fills use the book as it looks AFTER the delay
+adverse_move = "take"           # book moved against us during latency: "take" the worse price or "skip"
+max_slippage = 0.02             # order limit = signal ask + this; never pays more
+order_type = "FAK"              # FAK = partial fills OK, FOK = all or nothing
+max_trade_usd = 10.0            # max cost (incl. fee) per trade
+max_window_usd = 25.0           # max cost per market window (both sides)
+liquidity_memory_s = 10         # size we "took" stays hidden from later fills at that price this long
+status_interval_s = 60          # one-line status in `run` mode
+
+[recorder]
+interval_s = 1.0                # spot + order-book snapshot for replay
+depth = 5                       # book levels per side stored
+
+[dashboard]
+dashboard_host = "127.0.0.1"    # "0.0.0.0" to open it from an iPad on the same wifi
+dashboard_port = 8787
+timezone = "America/Chicago"
+primary_series = "btc-15m"      # market shown first (click the market name to switch)
+stale_after_s = 3               # grey out panels whose feed is quiet this long
+tick_hz = 4                     # price/book pushes per second (trades and log lines push immediately)
+log_lines = 500
+signal_window_min = 30
+
 [watch]
 print_interval_s = 2
-snapshot_interval_s = 5         # fair value + top of book written to SQLite this often

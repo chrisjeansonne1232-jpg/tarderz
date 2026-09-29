@@ -1,1 +1,5 @@
 aiohttp>=3.9
+fastapi>=0.110
+uvicorn>=0.30
+websockets>=12
+tzdata; sys_platform == "win32"

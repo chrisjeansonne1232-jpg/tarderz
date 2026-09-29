@@ -4,6 +4,7 @@ Coinbase (candles for vol bootstrap). No authenticated endpoints are used."""
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import aiohttp
@@ -20,20 +21,31 @@ class _Rest:
         self.session = session
         self.base = base_url.rstrip("/")
         self.timeout = aiohttp.ClientTimeout(total=timeout_s)
+        self.requests = 0
+        self.last_ok = 0.0  # time of the last successful response
+        self.last_error: tuple[float, str] | None = None
 
     async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         """GET JSON. Returns None on 404; raises HttpError on other failures."""
         url = f"{self.base}{path}"
+        self.requests += 1
         try:
             async with self.session.get(url, params=params, timeout=self.timeout) as r:
                 if r.status == 404:
+                    self.last_ok = time.time()
                     return None
                 if r.status >= 400:
                     body = (await r.text())[:300]
                     raise HttpError(f"GET {url} -> {r.status}: {body}")
-                return await r.json(content_type=None)
+                data = await r.json(content_type=None)
+                self.last_ok = time.time()
+                return data
         except (aiohttp.ClientError, TimeoutError) as e:
+            self.last_error = (time.time(), f"{type(e).__name__}: {e}")
             raise HttpError(f"GET {url} failed: {type(e).__name__}: {e}") from e
+        except HttpError as e:
+            self.last_error = (time.time(), str(e))
+            raise
 
 
 class GammaClient(_Rest):
@@ -76,11 +88,11 @@ class ClobClient(_Rest):
 
 
 class CoinbaseRest(_Rest):
-    async def candles(self, product_id: str, granularity_s: int = 60) -> list[tuple[float, float]]:
-        """Recent (bar_start_ts, close) pairs, oldest first. Coinbase rows are
-        [time, low, high, open, close, volume], newest first."""
+    async def candles(self, product_id: str, granularity_s: int = 60) -> list[tuple[float, float, float, float, float]]:
+        """Recent (bar_start_ts, open, high, low, close), oldest first. Coinbase
+        rows are [time, low, high, open, close, volume], newest first."""
         rows = await self.get(f"/products/{product_id}/candles", {"granularity": granularity_s})
         if not isinstance(rows, list):
             return []
         rows = sorted((r for r in rows if isinstance(r, list) and len(r) >= 5), key=lambda r: r[0])
-        return [(float(r[0]), float(r[4])) for r in rows]
+        return [(float(r[0]), float(r[3]), float(r[2]), float(r[1]), float(r[4])) for r in rows]

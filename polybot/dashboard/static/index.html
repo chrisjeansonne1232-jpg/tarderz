@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>polybot terminal · PAPER</title>
+<link rel="icon" href="data:,">
+<style>
+@font-face { font-family: "JetBrains Mono"; font-weight: 400; font-display: block; src: url(/static/vendor/jetbrains-mono/jetbrains-mono-latin-400-normal.woff2) format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-weight: 500; font-display: block; src: url(/static/vendor/jetbrains-mono/jetbrains-mono-latin-500-normal.woff2) format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-weight: 700; font-display: block; src: url(/static/vendor/jetbrains-mono/jetbrains-mono-latin-700-normal.woff2) format("woff2"); }
+
+:root {
+  --bg: #0b0911; --panel: #110e18; --panel2: #161221; --line: #241e31; --line2: #342b46;
+  --text: #e8e3f2; --dim: #8b829e; --dimmer: #6a6280; --faint: #3a3249;
+  --mag: #ff2e97; --mag-soft: rgba(255, 46, 151, .12); --mag-glow: rgba(255, 46, 151, .38);
+  /* marks (validated for CVD on this surface); text variants meet 4.5:1 */
+  --green: #1db877; --red: #d6334f; --amber: #d98e14; --grey: #6b6478;
+  --green-t: #2fd08c; --red-t: #f05a72; --amber-t: #e9a23b;
+  --violet: #b394ff; --blue: #8fa3ff; --teal: #58c4d6;
+  --fs: 11px; --fs-s: 9.5px; --gap: 6px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden; }
+body {
+  font: var(--fs)/1.35 "JetBrains Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased;
+  background: radial-gradient(1200px 500px at 70% -10%, rgba(255, 46, 151, .05), transparent 60%), var(--bg);
+}
+.num { font-variant-numeric: tabular-nums; }
+.up { color: var(--green-t); } .dn { color: var(--red-t); } .am { color: var(--amber-t); } .mut { color: var(--dim); }
+.hidden { display: none !important; }
+
+#app { display: grid; grid-template-rows: 40px 24px minmax(0, 1fr) 20px; height: 100vh; height: 100dvh; }
+
+/* ---------- header ---------- */
+#hdr { display: flex; align-items: center; gap: 12px; padding: 0 12px; border-bottom: 1px solid var(--line); background: rgba(17, 14, 24, .85); min-width: 0; white-space: nowrap; }
+.brand { font-weight: 700; letter-spacing: .14em; font-size: 12px; }
+.brand b { color: var(--mag); font-weight: 700; }
+.badge { font-size: 9.5px; font-weight: 700; letter-spacing: .12em; padding: 2px 6px; border-radius: 2px; border: 1px solid; }
+.badge.paper { color: var(--mag); border-color: var(--mag); background: var(--mag-soft); }
+.badge.replay { color: #0b0911; background: var(--amber); border-color: var(--amber); font-size: 12px; padding: 3px 9px; }
+.badge.test { color: var(--amber-t); border-color: rgba(217, 142, 20, .6); }
+.badge.off { color: var(--dim); border-color: var(--line2); }
+.hsep { width: 1px; align-self: stretch; margin: 9px 0; background: var(--line); }
+.mkt { display: flex; align-items: baseline; gap: 8px; cursor: pointer; user-select: none; }
+.mkt .name { font-weight: 500; }
+.mkt .tabs { font-size: var(--fs-s); color: var(--dimmer); }
+.mkt .tabs span.on { color: var(--mag); }
+.mkt .cd { font-weight: 700; font-size: 13px; color: var(--text); min-width: 5ch; }
+.kv { display: flex; align-items: baseline; gap: 6px; position: relative; }
+.kv > label { font-size: var(--fs-s); color: var(--dim); letter-spacing: .08em; text-transform: uppercase; }
+.kv .v { font-weight: 500; }
+.kv .v.big { font-size: 13px; font-weight: 700; }
+.kv .sub { font-size: var(--fs-s); color: var(--dim); }
+.clock { color: var(--dim); }
+.clock b { color: var(--text); font-weight: 500; }
+.feeds { margin-left: auto; display: flex; gap: 12px; }
+.feed { display: flex; align-items: center; gap: 5px; font-size: var(--fs-s); color: var(--dim); }
+.feed i { width: 7px; height: 7px; border-radius: 50%; background: var(--grey); display: inline-block; }
+.feed.ok i { background: var(--green); box-shadow: 0 0 6px rgba(29, 184, 119, .7); }
+.feed.warn i { background: var(--amber); box-shadow: 0 0 6px rgba(217, 142, 20, .6); }
+.feed.bad i { background: var(--red); }
+.feed .ms { color: var(--text); min-width: 5.5ch; }
+.feed.bad .ms { color: var(--red-t); }
+
+/* ---------- ticker strip ---------- */
+#strip { display: flex; align-items: center; gap: 18px; padding: 0 12px; border-bottom: 1px solid var(--line); font-size: 10.5px; overflow: hidden; white-space: nowrap; color: var(--text); }
+#strip .it { display: flex; gap: 6px; align-items: baseline; position: relative; }
+#strip label { color: var(--dim); font-size: var(--fs-s); letter-spacing: .08em; text-transform: uppercase; }
+#strip label.nocase { text-transform: none; font-size: 11px; }
+
+/* ---------- grid ---------- */
+#grid { display: grid; gap: var(--gap); padding: var(--gap); min-height: 0;
+  grid-template-rows: minmax(0, 28fr) minmax(0, 23fr) minmax(0, 25fr) minmax(0, 16fr); }
+.row { display: grid; gap: var(--gap); min-height: 0; min-width: 0; }
+.row1 { grid-template-columns: 236px minmax(0, 1fr) 290px 228px; }
+.row3 { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, 1fr); }
+.panel { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 3px; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.panel.feat { border-color: rgba(255, 46, 151, .85); box-shadow: 0 0 0 1px rgba(255, 46, 151, .12), 0 0 22px -8px var(--mag-glow); }
+.ph { display: flex; align-items: center; gap: 8px; padding: 6px 9px 3px; font-size: var(--fs-s); color: var(--dim); letter-spacing: .1em; text-transform: uppercase; flex: none; min-width: 0; }
+.ph .r { margin-left: auto; display: flex; gap: 8px; align-items: center; text-transform: none; letter-spacing: 0; white-space: nowrap; }
+.pb { flex: 1; min-height: 0; padding: 3px 9px 8px; position: relative; }
+.empty { color: var(--dimmer); font-size: var(--fs-s); letter-spacing: .06em; padding: 6px 0; }
+
+/* stale handling: greyed + labelled, never silently frozen */
+.kv.stale > *, #strip .it.stale > * { filter: grayscale(1); opacity: .32; }
+#f-rest.stale { opacity: .32; }
+.panel.stale > .pb, .panel.stale > .ph > :not(.stale-tag):not(.paper) { filter: grayscale(1); opacity: .32; }
+.stale-tag { display: none; }
+.panel.stale .ph .r { display: none; }
+.panel.stale .stale-tag { display: inline-block; margin-left: auto; white-space: nowrap; color: var(--amber-t); border: 1px solid rgba(217, 142, 20, .6); padding: 0 5px; border-radius: 2px; letter-spacing: .1em; font-weight: 700; }
+.kv.stale::after, #strip .it.stale::after { content: "STALE"; position: absolute; right: -4px; top: -7px; font-size: 7.5px; font-weight: 700; letter-spacing: .1em; color: var(--amber-t); filter: none; }
+#disc { position: fixed; left: 50%; top: 46px; transform: translateX(-50%); z-index: 10; background: #2a0f1a; color: var(--red-t); border: 1px solid var(--red); padding: 4px 12px; font-size: 10.5px; letter-spacing: .08em; border-radius: 2px; }
+
+/* flash on tick */
+@keyframes fu { from { color: var(--green-t); text-shadow: 0 0 8px rgba(47, 208, 140, .6); } }
+@keyframes fd { from { color: var(--red-t); text-shadow: 0 0 8px rgba(240, 90, 114, .6); } }
+.fu { animation: fu .7s ease-out; } .fd { animation: fd .7s ease-out; }
+
+/* ---------- wallet ---------- */
+.wallet .pb { display: flex; flex-direction: column; gap: 4px; }
+.wallet .bal { font-size: 30px; font-weight: 700; letter-spacing: -.01em; line-height: 1.35; }
+.wallet .chg { font-size: 11px; }
+.wallet .pl { font-size: 10px; color: var(--dim); line-height: 1.5; }
+.wallet .pl b { font-weight: 500; }
+.stats4 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; margin-top: auto; padding-top: 7px; border-top: 1px solid var(--line); }
+.stats4 label { display: block; font-size: 8.5px; color: var(--dim); letter-spacing: .1em; text-transform: uppercase; }
+.stats4 .v { font-size: 12px; font-weight: 500; white-space: nowrap; }
+.stats4 .sub, .wallet .sub { font-size: 9px; color: var(--dim); font-weight: 400; }
+.wallet .foot { font-size: var(--fs-s); color: var(--dim); }
+
+/* ---------- execution log ---------- */
+.log .pb { padding: 0; display: flex; }
+#log { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 2px 9px 6px; font-size: 10.5px; line-height: 1.5; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+#log::-webkit-scrollbar { width: 6px; } #log::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 3px; }
+.ln { display: flex; gap: 8px; white-space: nowrap; min-width: 0; }
+.ln .t { color: var(--dimmer); flex: none; }
+.ln .m { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tag { flex: none; display: inline-block; min-width: 7.2em; text-align: center; font-size: 9px; font-weight: 700; letter-spacing: .08em; padding: 0 4px; border-radius: 2px; border: 1px solid currentColor; cursor: pointer; line-height: 1.45; margin-top: 1px; }
+.tag.SIG { color: var(--mag); } .tag.FILL { color: var(--violet); } .tag.SKIP { color: var(--grey); }
+.tag.WIN { color: var(--green-t); } .tag.LOSS { color: var(--red-t); } .tag.SETTLE { color: var(--blue); }
+.tag.WARN { color: var(--amber-t); } .tag.RECONNECT { color: var(--teal); } .tag.MKT { color: var(--dim); }
+.chips { display: flex; gap: 5px; flex-wrap: nowrap; overflow: hidden; }
+.chips .tag { min-width: 0; opacity: .55; }
+.chips .tag.on { opacity: 1; background: rgba(255, 255, 255, .06); }
+.chips .tag .c { font-weight: 400; margin-left: 4px; }
+.paused { margin-left: auto; color: var(--amber-t); font-size: var(--fs-s); letter-spacing: .08em; flex: none; }
+
+/* ---------- footer ---------- */
+#ftr { display: flex; align-items: center; gap: 18px; padding: 0 12px; border-top: 1px solid var(--line); font-size: var(--fs-s); color: var(--dim); white-space: nowrap; overflow: hidden; }
+#ftr b { color: var(--text); font-weight: 400; }
+
+/* ---------- iPad landscape and narrower laptops ---------- */
+@media (max-width: 1320px) {
+  :root { --fs: 10.5px; --fs-s: 9px; --gap: 5px; }
+  #hdr { gap: 10px; padding: 0 9px; }
+  .row1 { grid-template-columns: 212px minmax(0, 1fr) 258px 204px; }
+  .wallet .bal { font-size: 26px; }
+  .feeds { gap: 9px; }
+  .long, .hsep { display: none; }
+  #hdr { gap: 9px; }
+  .brand { letter-spacing: .08em; }
+  .kv > label { font-size: 8.5px; letter-spacing: .05em; }
+  .kv .v.big { font-size: 12px; }
+  .feeds { gap: 7px; }
+  .feed { gap: 4px; }
+  #strip { gap: 12px; }
+}
+@media (max-height: 760px) {
+  #grid { grid-template-rows: minmax(0, 28fr) minmax(0, 22fr) minmax(0, 25fr) minmax(0, 15fr); }
+  .wallet .bal { font-size: 24px; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header id="hdr">
+    <div class="brand">POLY<b>BOT</b></div>
+    <span class="badge paper" title="Simulated fills only. This project cannot place orders.">PAPER</span>
+    <span class="badge replay hidden" id="b-replay">REPLAY</span>
+    <span class="badge test hidden" id="b-test" title="Endpoints are not Polymarket's production hosts">TEST</span>
+    <span class="badge off hidden" id="b-off" title="watch mode: data only, no paper trading">ENGINE OFF</span>
+    <div class="hsep"></div>
+    <div class="mkt kv" id="h-mkt" data-feeds="gamma" title="click to switch market">
+      <span class="name" id="h-mkt-name">—</span>
+      <span class="tabs" id="h-mkt-tabs">⇄</span>
+      <span class="cd num" id="h-cd">--:--</span>
+    </div>
+    <div class="hsep"></div>
+    <div class="kv" data-feeds="coinbase"><label>BTC</label><span class="v big num" id="h-btc">—</span></div>
+    <div class="kv" data-feeds="clob"><label>Up</label><span class="v num" id="h-up">—</span></div>
+    <div class="kv" data-feeds="clob"><label>Down</label><span class="v num" id="h-down">—</span></div>
+    <div class="hsep"></div>
+    <div class="kv" data-feeds=""><label>Trades</label><span class="v num" id="h-trades">—</span></div>
+    <div class="kv" data-feeds=""><label>Win</label><span class="v num" id="h-win">—</span></div>
+    <div class="kv" data-feeds="" title="Net P&L of trades settled today (after fees). Smaller: the same trades with zero fees.">
+      <label>Net<span class="long"> P&amp;L</span> today</label><span class="v big num" id="h-pnl">—</span><span class="sub num" id="h-pnl0"></span>
+    </div>
+    <div class="hsep"></div>
+    <div class="clock num" id="h-clock">—</div>
+    <div class="feeds" id="h-feeds"></div>
+  </header>
+
+  <div id="strip">
+    <div class="it" data-feeds="coinbase,chainlink"><label>S0</label><span class="num" id="s-s0">—</span></div>
+    <div class="it" data-feeds="coinbase,chainlink"><label>Δ S0</label><span class="num" id="s-dist">—</span></div>
+    <div class="it" data-feeds="coinbase"><label class="nocase">σ</label><span class="num" id="s-sigma">—</span></div>
+    <div class="it" data-feeds=""><label>Fee</label><span class="num" id="s-fee">—</span></div>
+    <div class="it" data-feeds="coinbase,chainlink,clob"><label>Edge Up</label><span class="num" id="s-eup">—</span></div>
+    <div class="it" data-feeds="coinbase,chainlink,clob"><label>Edge Down</label><span class="num" id="s-edn">—</span></div>
+    <div class="it" data-feeds="" title="Signal needs edge after fee − book-walk slippage above this buffer"><label>Buffer</label><span class="num" id="s-thr">—</span></div>
+    <div class="it" data-feeds=""><label>Latency</label><span class="num" id="s-lat">—</span></div>
+  </div>
+
+  <main id="grid">
+    <div class="row row1">
+      <section class="panel feat wallet" id="p-wallet" data-feeds="">
+        <div class="ph">Wallet <span class="badge paper">PAPER</span><span class="r mut" id="w-mode"></span><span class="stale-tag">STALE</span></div>
+        <div class="pb">
+          <div class="bal num" id="w-bal">—</div>
+          <div class="chg num" id="w-chg">—</div>
+          <div class="pl num" id="w-pl">—</div>
+          <div class="stats4">
+            <div><label>Trades</label><span class="v num" id="w-trades">—</span></div>
+            <div><label>Win rate</label><span class="v num" id="w-win">—</span></div>
+            <div><label>Profit factor</label><span class="v num" id="w-pf">—</span></div>
+            <div><label>Max drawdown</label><span class="v num" id="w-dd">—</span></div>
+          </div>
+          <div class="foot num" id="w-open">—</div>
+        </div>
+      </section>
+      <section class="panel" id="p-chart" data-feeds="coinbase">
+        <div class="ph">BTC-USD · 1m · Coinbase<span class="stale-tag">STALE</span></div>
+        <div class="pb"><div class="empty">candles + S0 line + window boundaries — dashboard stage 2</div></div>
+      </section>
+      <section class="panel" id="p-book" data-feeds="clob">
+        <div class="ph">Order book<span class="stale-tag">STALE</span></div>
+        <div class="pb"><div class="empty">top 5 ladder with fair-value marker — dashboard stage 2</div></div>
+      </section>
+      <section class="panel feat" id="p-streak" data-feeds="">
+        <div class="ph">Streak<span class="stale-tag">STALE</span></div>
+        <div class="pb"><div class="empty">streak, per-trade P&amp;L bars, best/worst, fees — dashboard stage 3</div></div>
+      </section>
+    </div>
+
+    <section class="panel" id="p-map" data-feeds="">
+      <div class="ph">Signal map · edge after fees vs time<span class="stale-tag">STALE</span></div>
+      <div class="pb"><div class="empty">every evaluated opportunity as a dot — dashboard stage 3</div></div>
+    </section>
+
+    <div class="row row3">
+      <section class="panel" id="p-equity" data-feeds="">
+        <div class="ph">Equity · net vs zero-fee<span class="stale-tag">STALE</span></div>
+        <div class="pb"><div class="empty">cumulative P&amp;L and drawdown — dashboard stage 3</div></div>
+      </section>
+      <section class="panel" id="p-trades" data-feeds="">
+        <div class="ph">Recent trades<span class="stale-tag">STALE</span></div>
+        <div class="pb"><div class="empty">trade table — dashboard stage 3</div></div>
+      </section>
+      <section class="panel" id="p-analytics" data-feeds="">
+        <div class="ph">Analytics<span class="stale-tag">STALE</span></div>
+        <div class="pb"><div class="empty">edge / P&amp;L / slippage / latency histograms — dashboard stage 4</div></div>
+      </section>
+    </div>
+
+    <section class="panel log" id="p-log" data-feeds="">
+      <div class="ph">Execution log
+        <span class="chips" id="log-chips"></span>
+        <span class="paused hidden" id="log-paused">❚❚ PAUSED</span>
+        <span class="stale-tag">STALE</span>
+      </div>
+      <div class="pb"><div id="log"></div></div>
+    </section>
+  </main>
+
+  <footer id="ftr">
+    <span id="f-conn">connecting…</span>
+    <span id="f-rest" data-feeds=""></span>
+  </footer>
+</div>
+<div id="disc" class="hidden">DISCONNECTED FROM BOT · RECONNECTING…</div>
+
+<script>
+"use strict";
+// Everything rendered here comes from the bot over /ws. No sample data, no timers that invent values.
+
+const $ = (id) => document.getElementById(id);
+const TAGS = ["SIG", "FILL", "SKIP", "WIN", "LOSS", "SETTLE", "WARN", "RECONNECT", "MKT"];
+const FEED_LABEL = { coinbase: "COINBASE", chainlink: "CHAINLINK", clob: "CLOB", gamma: "GAMMA" };
+const FEED_SHORT = { coinbase: "CB", chainlink: "CL", clob: "CLOB", gamma: "GAMMA" };
+const FEED_TITLE = { coinbase: "Coinbase BTC-USD ticker (websocket)", chainlink: "Chainlink BTC/USD via Polymarket RTDS (resolution source)", clob: "Polymarket CLOB market channel (order books)", gamma: "Polymarket Gamma API (market discovery, resolution; polled)" };
+
+const S = {
+  meta: null, tick: null, stats: null,
+  log: [], trades: new Map(), signals: new Map(), candles: [],
+  connected: false, tickT: 0, tickRecv: 0,
+  series: null, logFilter: null, logHover: false, logTouchUntil: 0,
+  dirty: new Set(), pendingLog: [],
+};
+
+// ---------- time ----------
+function rate() { return S.meta && S.meta.speed ? (S.meta.paused ? 0 : S.meta.speed) : 1; }
+function serverNow() { return S.tickT ? S.tickT + (performance.now() / 1000 - S.tickRecv) * rate() : Date.now() / 1000; }
+let _tzf = null, _tzs = null;
+function tzFmt() {
+  const tz = (S.meta && S.meta.tz) || "America/Chicago";
+  if (!_tzf || _tzf.resolvedOptions().timeZone !== tz) {
+    _tzf = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
+    _tzs = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "short" });
+  }
+  return _tzf;
+}
+function hms(ts) { return tzFmt().format(new Date(ts * 1000)); }
+function tzAbbr(ts) { tzFmt(); const p = _tzs.formatToParts(new Date(ts * 1000)).find((x) => x.type === "timeZoneName"); return p ? p.value : ""; }
+function mmss(s) { if (s == null || !isFinite(s)) return "--:--"; s = Math.max(0, Math.floor(s)); return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"); }
+
+// ---------- formatting ----------
+const MINUS = "−";
+function signed(x, d) { return (x > 0 ? "+" : x < 0 ? MINUS : "") + Math.abs(x).toFixed(d); }
+function usd(x, sign) { if (x == null) return "—"; const s = sign ? (x > 0 ? "+" : x < 0 ? MINUS : "") : (x < 0 ? MINUS : ""); return s + "$" + Math.abs(x).toFixed(2); }
+function pct(x, d = 1, sign = false) { return x == null ? "—" : (sign ? signed(100 * x, d) : (100 * x).toFixed(d)) + "%"; }
+function cents(x) { return x == null ? "—" : signed(100 * x, 1) + "¢"; }
+function price(x, d = 2) { return x == null ? "—" : x.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }); }
+function age(ms) { return ms == null ? "—" : ms < 1000 ? Math.round(ms) + "ms" : ms < 60000 ? (ms / 1000).toFixed(1) + "s" : Math.round(ms / 60000) + "m"; }
+function pnlClass(x) { return x > 0 ? "up" : x < 0 ? "dn" : ""; }
+
+function setText(el, text) { if (el && el._t !== text) { el.textContent = text; el._t = text; } }
+function setNum(el, v, text, cls) {
+  if (!el) return;
+  setText(el, text);
+  if (cls !== undefined && el._c !== cls) { el.className = el.className.replace(/\b(up|dn|am)\b/g, "").trim() + (cls ? " " + cls : ""); el._c = cls; }
+  if (v != null && el._v != null && v !== el._v) {
+    el.classList.remove("fu", "fd"); void el.offsetWidth; el.classList.add(v > el._v ? "fu" : "fd");
+  }
+  el._v = v;
+}
+
+// ---------- data access ----------
+function win() { return S.tick && S.tick.windows ? S.tick.windows[S.series] : null; }
+function best(side) { return side && side.ready && side.asks && side.asks.length ? side.asks[0][0] : null; }
+function bid(side) { return side && side.ready && side.bids && side.bids.length ? side.bids[0][0] : null; }
+function mid(side) { const a = best(side), b = bid(side); return a != null && b != null ? (a + b) / 2 : null; }
+function feedAgeMs(name) {
+  const f = S.tick && S.tick.feeds ? S.tick.feeds[name] : null;
+  if (!f || !f.last) return null;
+  return Math.max(0, (serverNow() - f.last) * 1000);
+}
+function isStale(name) {
+  if (!S.connected) return true;
+  const a = feedAgeMs(name);
+  return a == null || a > S.meta.stale_after_s * 1000;
+}
+
+// ---------- websocket ----------
+let backoff = 500;
+function connect() {
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+  ws.onopen = () => { backoff = 500; };
+  ws.onmessage = (e) => onMsg(JSON.parse(e.data));
+  ws.onclose = () => { S.connected = false; setTimeout(connect, backoff); backoff = Math.min(backoff * 2, 5000); };
+  ws.onerror = () => ws.close();
+}
+function onMsg(m) {
+  switch (m.type) {
+    case "snapshot":
+      S.meta = m.meta; S.stats = m.stats; S.log = m.log || []; S.candles = m.candles || [];
+      S.trades = new Map((m.trades || []).map((t) => [t.id, t]));
+      S.signals = new Map((m.signals || []).map((s) => [s.id, s]));
+      if (!S.series || !S.meta.series.some((x) => x.name === S.series)) S.series = S.meta.primary_series;
+      S.connected = true;
+      applyTick(m.tick);
+      buildStatic();
+      ["header", "strip", "wallet", "logfull"].forEach((k) => S.dirty.add(k));
+      break;
+    case "tick": applyTick(m); break;
+    case "log":
+      S.log.push(m.line); if (S.log.length > 2000) S.log.splice(0, S.log.length - 2000);
+      S.pendingLog.push(m.line); S.dirty.add("log");
+      break;
+    case "trade": S.trades.set(m.trade.id, m.trade); S.dirty.add("trades"); break;
+    case "signal": S.signals.set(m.signal.id, m.signal); S.dirty.add("signals"); break;
+    case "stats": S.stats = m.stats; S.dirty.add("wallet"); S.dirty.add("header"); break;
+    case "replay": if (S.meta) { Object.assign(S.meta, m.meta); S.dirty.add("header"); } break;
+  }
+}
+function applyTick(t) {
+  if (!t) return;
+  S.tick = t; S.tickT = t.t; S.tickRecv = performance.now() / 1000;
+  S.dirty.add("header"); S.dirty.add("strip"); S.dirty.add("footer");
+}
+
+// ---------- static bits built once per snapshot ----------
+function buildStatic() {
+  const m = S.meta;
+  $("b-replay").classList.toggle("hidden", m.source !== "replay");
+  $("b-test").classList.toggle("hidden", !m.test_feed);
+  $("b-test").title = "Endpoints point at " + m.endpoint_host + ", not Polymarket production";
+  $("b-off").classList.toggle("hidden", !!m.trading);
+  const feeds = $("h-feeds"); feeds.innerHTML = "";
+  for (const f of m.feeds) {
+    const d = document.createElement("div"); d.className = "feed"; d.id = "feed-" + f; d.title = FEED_TITLE[f] + " · time since last message";
+    d.innerHTML = `<i></i><span>${FEED_SHORT[f]}</span><span class="ms num">—</span>`;
+    feeds.appendChild(d);
+  }
+  const chips = $("log-chips"); chips.innerHTML = "";
+  for (const t of TAGS) {
+    const c = document.createElement("span"); c.className = "tag " + t; c.dataset.tag = t;
+    c.innerHTML = `${t}<span class="c">0</span>`; chips.appendChild(c);
+  }
+  setText($("s-lat"), m.latency_ms.toFixed(0) + "ms sim");
+  $("s-lat").parentElement.title = "Simulated signal→fill delay; if the book moved: " + (m.adverse_move === "skip" ? "skip the trade" : "take the worse price (up to the order limit)");
+  setText($("s-thr"), (100 * m.safety_buffer).toFixed(1) + "¢");
+}
+
+// ---------- renderers ----------
+function renderHeader() {
+  const m = S.meta, t = S.tick; if (!m || !t) return;
+  const ser = m.series.find((x) => x.name === S.series) || m.series[0];
+  const label = ser.label.replace(" Up/Down", "");
+  $("h-mkt-name").innerHTML = `${label}<span class="long"> Up/Down</span>`;
+  const next = m.series[(m.series.indexOf(ser) + 1) % m.series.length];
+  $("h-mkt-tabs").classList.toggle("hidden", m.series.length < 2);
+  $("h-mkt").title = m.series.length > 1 ? "click to switch to " + next.label : "";
+  const sp = t.spot;
+  setNum($("h-btc"), sp ? sp.price : null, sp ? "$" + price(sp.price) : "—");
+  const w = win();
+  const um = w ? mid(w.up) : null, dm = w ? mid(w.down) : null;
+  setNum($("h-up"), um, um == null ? "—" : um.toFixed(3));
+  setNum($("h-down"), dm, dm == null ? "—" : dm.toFixed(3));
+  const st = S.stats;
+  if (st) {
+    setNum($("h-trades"), st.today.trades, String(st.today.trades));
+    setText($("h-win"), st.today.win_rate == null ? "—" : pct(st.today.win_rate, 0));
+    setNum($("h-pnl"), st.today.net_pnl, usd(st.today.net_pnl, true), pnlClass(st.today.net_pnl));
+    setText($("h-pnl0"), "0-fee " + usd(st.today.zero_fee_pnl, true));
+  } else {
+    setText($("h-trades"), m.trading ? "0" : "—"); setText($("h-win"), "—"); setText($("h-pnl"), m.trading ? "$0.00" : "—"); setText($("h-pnl0"), "");
+  }
+}
+
+function renderStrip() {
+  const t = S.tick, w = win(); if (!t) return;
+  const s0 = w ? w.s0 : null;
+  setText($("s-s0"), s0 == null ? (w ? "S0 " + w.s0_status : "—") : price(s0) + (w.s0_src === "chainlink" ? " CL" : " CB"));
+  const spot = w && w.spot_adj != null ? w.spot_adj : null;
+  if (s0 != null && spot != null) { const d = spot / s0 - 1; setNum($("s-dist"), d, pct(d, 3, true), pnlClass(d)); }
+  else setNum($("s-dist"), null, "—", "");
+  setText($("s-sigma"), t.sigma ? (100 * t.sigma.annual).toFixed(1) + "%/yr" + (t.sigma.boot ? "*" : "") : "warming up");
+  $("s-sigma").parentElement.title = t.sigma && t.sigma.boot ? `* ${t.sigma.live_min.toFixed(0)} min of live 1 s samples so far; the rest of the lookback uses Coinbase 1-minute candles` : "realized volatility, annualized";
+  if (w && w.fee) {
+    const a = best(w.up);
+    const perSh = a != null ? w.fee.rate * Math.pow(a * (1 - a), w.fee.exp) : null;
+    setText($("s-fee"), `${w.fee.rate}·${w.fee.exp === 1 ? "p(1−p)" : "(p(1−p))^" + w.fee.exp}` + (perSh != null ? ` · ${(100 * perSh).toFixed(2)}¢/sh @${a.toFixed(2)}` : ""));
+  } else setText($("s-fee"), "—");
+  for (const [id, v] of [["s-eup", w ? w.edge_up : null], ["s-edn", w ? w.edge_down : null]]) {
+    setNum($(id), v, v == null ? (w && w.fv_reason ? w.fv_reason : "—") : cents(v), v == null ? "" : pnlClass(v));
+  }
+}
+
+function renderWallet() {
+  const m = S.meta; if (!m) return;
+  const st = S.stats;
+  setText($("w-mode"), m.trading ? (m.source === "replay" ? "replay" : "paper engine on") : "watch mode · no trades");
+  const bal = st ? st.bankroll : m.starting_bankroll;
+  setNum($("w-bal"), bal, "$" + price(bal));
+  const ch = st ? st.bankroll_pct : 0;
+  const chEl = $("w-chg"); chEl.innerHTML = `<span class="${pnlClass(ch)}">${pct(ch, 2, true)}</span> <span class="mut">since start · $${price(m.starting_bankroll)}</span>`;
+  if (st) {
+    $("w-pl").innerHTML = `net <b class="${pnlClass(st.net_pnl)}">${usd(st.net_pnl, true)}</b> · <span title="same trades, no fees">zero-fee ${usd(st.zero_fee_pnl, true)}</span>`;
+    $("w-trades").innerHTML = `${st.trades}` + (st.open_count ? `<span class="sub"> ${st.open_count} open</span>` : "");
+    $("w-win").innerHTML = st.win_rate == null ? "—" : `${pct(st.win_rate, 1)}<span class="sub"> ${st.wins}/${st.settled}</span>`;
+    const pf = st.profit_factor;
+    setText($("w-pf"), pf == null ? (st.losses === 0 && st.wins > 0 ? "∞" : "—") : pf.toFixed(2));
+    $("w-dd").innerHTML = st.max_drawdown ? `${usd(-st.max_drawdown)}<span class="sub"> ${pct(st.max_drawdown_pct, 0)}</span>` : "$0.00";
+    setText($("w-open"), `fees paid ${usd(st.fees_all)} · in play ${usd(st.at_risk)}`);
+  } else {
+    $("w-pl").innerHTML = m.trading ? "no trades yet" : "engine off in watch mode";
+    ["w-trades", "w-win", "w-pf", "w-dd", "w-open"].forEach((id) => setText($(id), "—"));
+  }
+}
+
+function tagCounts() {
+  const c = {}; for (const l of S.log) c[l[1]] = (c[l[1]] || 0) + 1; return c;
+}
+function logLine(l) {
+  const d = document.createElement("div"); d.className = "ln";
+  const tag = TAGS.includes(l[1]) ? l[1] : "MKT";
+  d.innerHTML = `<span class="t num">${hms(l[0])}</span><span class="tag ${tag}" data-tag="${tag}">${l[1]}</span><span class="m"></span>`;
+  d.lastChild.textContent = l[2];
+  d.title = l[2];
+  return d;
+}
+function logPaused() { return S.logHover || performance.now() < S.logTouchUntil; }
+function renderLog(full) {
+  const box = $("log");
+  const pass = (l) => !S.logFilter || l[1] === S.logFilter;
+  if (full) {
+    box.innerHTML = "";
+    const frag = document.createDocumentFragment();
+    for (const l of S.log.filter(pass).slice(-600)) frag.appendChild(logLine(l));
+    box.appendChild(frag); S.pendingLog = [];
+  } else if (S.pendingLog.length) {
+    const frag = document.createDocumentFragment();
+    for (const l of S.pendingLog) if (pass(l)) frag.appendChild(logLine(l));
+    S.pendingLog = [];
+    box.appendChild(frag);
+    while (box.childElementCount > 700) box.removeChild(box.firstChild);
+  }
+  if (!logPaused()) box.scrollTop = box.scrollHeight;
+  const counts = tagCounts();
+  for (const c of $("log-chips").children) {
+    const t = c.dataset.tag;
+    c.lastChild.textContent = counts[t] || 0;
+    c.classList.toggle("on", !S.logFilter || S.logFilter === t);
+  }
+}
+
+function renderFooter() {
+  const t = S.tick; if (!t) return;
+  const parts = [];
+  for (const f of S.meta.feeds) { const x = t.feeds[f]; parts.push(`${FEED_LABEL[f].toLowerCase()} <b>${x && x.mps != null ? x.mps.toFixed(1) : "—"}</b>/s`); }
+  $("f-rest").innerHTML = parts.join(" · ") +
+    ` &nbsp;│&nbsp; loop lag <b>${t.loop.lag_ms.toFixed(1)}</b>ms (max ${t.loop.lag_max_ms.toFixed(1)})` +
+    ` &nbsp;│&nbsp; db <b>${(t.db_bytes / 1048576).toFixed(1)}</b> MB` +
+    ` &nbsp;│&nbsp; uptime <b>${fmtUptime(t.uptime_s)}</b>` +
+    (t.engine ? ` &nbsp;│&nbsp; orders in flight <b>${t.engine.in_flight}</b>` : "");
+}
+function fmtUptime(s) { s = Math.floor(s); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return (h ? h + "h " : "") + m + "m " + (s % 60) + "s"; }
+
+// fast path (~10 Hz): clock, countdown, feed ages, staleness
+function renderFast() {
+  const now = serverNow();
+  $("disc").classList.toggle("hidden", S.connected);
+  setText($("f-conn"), S.connected ? (S.meta && S.meta.source === "replay" ? "replay stream" : "connected to bot") : "disconnected");
+  if (!S.meta) return;
+  setText($("h-clock"), hms(now) + " " + tzAbbr(now));
+  const w = win();
+  setText($("h-cd"), w ? mmss(w.end - now) : "--:--");
+  for (const f of S.meta.feeds) {
+    const el = $("feed-" + f); if (!el) continue;
+    const a = feedAgeMs(f);
+    const lim = S.meta.stale_after_s * 1000;
+    const slow = Math.min(lim, 1250 * ((S.meta.feed_cadence_s || {})[f] || 1));
+    el.className = "feed " + (!S.connected || a == null || a > lim ? "bad" : a > slow ? "warn" : "ok");
+    setText(el.lastChild, a == null ? "no data" : age(a));
+  }
+  for (const el of document.querySelectorAll("[data-feeds]")) {
+    const deps = el.dataset.feeds ? el.dataset.feeds.split(",") : [];
+    const bad = !S.connected ? ["bot"] : deps.filter(isStale);
+    const stale = bad.length > 0;
+    if (el._stale !== stale || (stale && el._badKey !== bad.join())) {
+      el.classList.toggle("stale", stale); el._stale = stale; el._badKey = bad.join();
+      const tag = el.querySelector(".stale-tag");
+      if (tag) tag.textContent = stale ? "STALE · " + bad.map((b) => (FEED_LABEL[b] || b).toUpperCase()).join(", ") : "STALE";
+    }
+  }
+}
+
+let lastFast = 0;
+function frame(ts) {
+  if (ts - lastFast > 100) { lastFast = ts; renderFast(); }
+  if (S.meta) {
+    if (S.dirty.has("header")) renderHeader();
+    if (S.dirty.has("strip")) renderStrip();
+    if (S.dirty.has("wallet") || S.dirty.has("trades")) renderWallet();
+    if (S.dirty.has("logfull")) renderLog(true); else if (S.dirty.has("log")) renderLog(false);
+    if (S.dirty.has("footer")) renderFooter();
+  }
+  S.dirty.clear();
+  requestAnimationFrame(frame);
+}
+
+// ---------- interactions (display only; nothing is sent to the bot) ----------
+$("h-mkt").addEventListener("click", () => {
+  if (!S.meta) return;
+  const names = S.meta.series.map((x) => x.name);
+  S.series = names[(names.indexOf(S.series) + 1) % names.length];
+  ["header", "strip"].forEach((k) => S.dirty.add(k));
+});
+function onTagClick(e) {
+  const t = e.target.closest(".tag"); if (!t || !t.dataset.tag) return;
+  S.logFilter = S.logFilter === t.dataset.tag ? null : t.dataset.tag;
+  S.dirty.add("logfull");
+}
+$("log").addEventListener("click", onTagClick);
+$("log-chips").addEventListener("click", onTagClick);
+const logBox = $("log");
+logBox.addEventListener("mouseenter", () => { S.logHover = true; $("log-paused").classList.remove("hidden"); });
+logBox.addEventListener("mouseleave", () => { S.logHover = false; $("log-paused").classList.add("hidden"); S.dirty.add("log"); });
+logBox.addEventListener("touchstart", () => { S.logTouchUntil = performance.now() + 8000; $("log-paused").classList.remove("hidden"); setTimeout(() => { if (!logPaused()) $("log-paused").classList.add("hidden"); }, 8100); }, { passive: true });
+
+connect();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

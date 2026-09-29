@@ -29,15 +29,43 @@ CREATE TABLE IF NOT EXISTS markets (
     resolved_outcome TEXT, resolved_at REAL, resolution_detail TEXT
 );
 
-CREATE TABLE IF NOT EXISTS fv_snapshots (
-    id INTEGER PRIMARY KEY,
-    ts REAL, slug TEXT, tau REAL,
-    spot REAL, spot_adj REAL, strike REAL, sigma_annual REAL, basis REAL, p_up REAL,
-    up_bid REAL, up_bid_sz REAL, up_ask REAL, up_ask_sz REAL,
-    down_bid REAL, down_bid_sz REAL, down_ask REAL, down_ask_sz REAL,
-    spot_age_ms REAL, oracle_age_ms REAL, book_age_ms REAL
+-- One row per series per second: spot, oracle, fair value and top of book,
+-- plus a zlib-compressed JSON ladder (top N levels, feed ages) for replay.
+CREATE TABLE IF NOT EXISTS snapshots_1s (
+    ts REAL, series TEXT, slug TEXT, tau REAL,
+    spot REAL, chainlink REAL, basis REAL, sigma_annual REAL, s0 REAL, fair_up REAL,
+    up_bid REAL, up_ask REAL, down_bid REAL, down_ask REAL,
+    blob BLOB
 );
-CREATE INDEX IF NOT EXISTS fv_snapshots_slug ON fv_snapshots(slug);
+CREATE INDEX IF NOT EXISTS snapshots_1s_ts ON snapshots_1s(ts);
+
+CREATE TABLE IF NOT EXISTS candles_1m (
+    ts REAL PRIMARY KEY, open REAL, high REAL, low REAL, close REAL, ticks INTEGER, source TEXT
+);
+
+-- Every evaluated opportunity: taken signals and (throttled) skips.
+CREATE TABLE IF NOT EXISTS signals (
+    id INTEGER PRIMARY KEY, ts REAL, slug TEXT, series TEXT, side TEXT, token TEXT,
+    tau REAL, spot REAL, s0 REAL, sigma_annual REAL, fair REAL,
+    best_ask REAL, best_ask_size REAL, vwap REAL, fee_ps REAL,
+    edge_gross REAL, edge_after_fee REAL, slippage REAL, net_edge REAL, threshold REAL,
+    shares REAL, usd REAL, decision TEXT, reason TEXT, trade_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS signals_ts ON signals(ts);
+
+CREATE TABLE IF NOT EXISTS trades (
+    id INTEGER PRIMARY KEY, signal_id INTEGER, slug TEXT, series TEXT, side TEXT, token TEXT,
+    ts_signal REAL, ts_fill REAL, latency_ms REAL,
+    shares REAL, shares_held REAL, avg_price REAL, signal_ask REAL, signal_vwap REAL,
+    cost REAL, fee REAL, fee_in TEXT, fair_signal REAL, fair_fill REAL, edge_entry REAL,
+    levels TEXT, status TEXT, window_end REAL, outcome TEXT, payout REAL,
+    pnl REAL, pnl_zero_fee REAL, settled_ts REAL
+);
+
+CREATE TABLE IF NOT EXISTS exec_log (
+    id INTEGER PRIMARY KEY, ts REAL, tag TEXT, msg TEXT, ref TEXT
+);
+CREATE INDEX IF NOT EXISTS exec_log_ts ON exec_log(ts);
 
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY, ts REAL, level TEXT, kind TEXT, slug TEXT, detail TEXT
@@ -45,14 +73,40 @@ CREATE TABLE IF NOT EXISTS events (
 """
 
 
+TRADE_COLS = (
+    "id", "signal_id", "slug", "series", "side", "token", "ts_signal", "ts_fill", "latency_ms",
+    "shares", "shares_held", "avg_price", "signal_ask", "signal_vwap", "cost", "fee", "fee_in",
+    "fair_signal", "fair_fill", "edge_entry", "levels", "status", "window_end", "outcome", "payout",
+    "pnl", "pnl_zero_fee", "settled_ts",
+)
+SIGNAL_COLS = (
+    "id", "ts", "slug", "series", "side", "token", "tau", "spot", "s0", "sigma_annual", "fair",
+    "best_ask", "best_ask_size", "vwap", "fee_ps", "edge_gross", "edge_after_fee", "slippage",
+    "net_edge", "threshold", "shares", "usd", "decision", "reason", "trade_id",
+)
+
+
 class Database:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, read_only: bool = False) -> None:
+        self.path = path
+        if read_only:
+            self.conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, isolation_level=None)
+            return
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(path, isolation_level=None)  # autocommit
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.executescript(SCHEMA)
-        self.conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '1')")
+        self.conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '2')")
+
+    def size_bytes(self) -> int:
+        total = 0
+        for suffix in ("", "-wal"):
+            try:
+                total += Path(self.path + suffix).stat().st_size
+            except OSError:
+                pass
+        return total
 
     def close(self) -> None:
         self.conn.close()
@@ -115,10 +169,71 @@ class Database:
         ).fetchall()
         return [(r[0], r[1] or "", float(r[2])) for r in rows]
 
-    def insert_snapshot(self, row: dict[str, Any]) -> None:
-        cols = ",".join(row)
-        qs = ",".join("?" for _ in row)
-        self.conn.execute(f"INSERT INTO fv_snapshots({cols}) VALUES ({qs})", tuple(row.values()))
+    # --- paper trading -----------------------------------------------------------
+    def insert_signal(self, row: dict[str, Any]) -> int:
+        cols = [c for c in SIGNAL_COLS if c != "id" and c in row]
+        cur = self.conn.execute(
+            f"INSERT INTO signals({','.join(cols)}) VALUES ({','.join('?' for _ in cols)})",
+            tuple(row[c] for c in cols),
+        )
+        return int(cur.lastrowid)
+
+    def update_signal(self, signal_id: int, **fields: Any) -> None:
+        sets = ",".join(f"{k}=?" for k in fields)
+        self.conn.execute(f"UPDATE signals SET {sets} WHERE id=?", (*fields.values(), signal_id))
+
+    def insert_trade(self, row: dict[str, Any]) -> int:
+        cols = [c for c in TRADE_COLS if c != "id" and c in row]
+        cur = self.conn.execute(
+            f"INSERT INTO trades({','.join(cols)}) VALUES ({','.join('?' for _ in cols)})",
+            tuple(row[c] for c in cols),
+        )
+        return int(cur.lastrowid)
+
+    def update_trade(self, trade_id: int, **fields: Any) -> None:
+        sets = ",".join(f"{k}=?" for k in fields)
+        self.conn.execute(f"UPDATE trades SET {sets} WHERE id=?", (*fields.values(), trade_id))
+
+    def all_trades(self) -> list[dict[str, Any]]:
+        cur = self.conn.execute(f"SELECT {','.join(TRADE_COLS)} FROM trades ORDER BY id")
+        return [dict(zip(TRADE_COLS, r)) for r in cur.fetchall()]
+
+    def signals_between(self, t0: float, t1: float) -> list[dict[str, Any]]:
+        cur = self.conn.execute(
+            f"SELECT {','.join(SIGNAL_COLS)} FROM signals WHERE ts >= ? AND ts < ? ORDER BY ts", (t0, t1)
+        )
+        return [dict(zip(SIGNAL_COLS, r)) for r in cur.fetchall()]
+
+    def insert_exec_log(self, ts: float, tag: str, msg: str, ref: str | None) -> None:
+        self.conn.execute("INSERT INTO exec_log(ts, tag, msg, ref) VALUES (?,?,?,?)", (ts, tag, msg, ref))
+
+    def exec_log_between(self, t0: float, t1: float, limit: int | None = None) -> list[tuple[float, str, str, str | None]]:
+        q = "SELECT ts, tag, msg, ref FROM exec_log WHERE ts >= ? AND ts < ? ORDER BY ts"
+        rows = self.conn.execute(q, (t0, t1)).fetchall()
+        return rows[-limit:] if limit else rows
+
+    # --- recorder -------------------------------------------------------------------
+    def insert_snapshot_1s(self, row: tuple) -> None:
+        self.conn.execute(
+            """INSERT INTO snapshots_1s(ts, series, slug, tau, spot, chainlink, basis, sigma_annual, s0,
+                   fair_up, up_bid, up_ask, down_bid, down_ask, blob) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            row,
+        )
+
+    def upsert_candle(self, ts: float, o: float, h: float, l: float, c: float, ticks: int, source: str) -> None:
+        self.conn.execute(
+            """INSERT INTO candles_1m(ts, open, high, low, close, ticks, source) VALUES (?,?,?,?,?,?,?)
+               ON CONFLICT(ts) DO UPDATE SET open=excluded.open, high=excluded.high, low=excluded.low,
+                   close=excluded.close, ticks=excluded.ticks, source=excluded.source
+               WHERE candles_1m.source != 'ticks' OR excluded.source = 'ticks'""",
+            (ts, o, h, l, c, ticks, source),
+        )
+
+    def candles_between(self, t0: float, t1: float) -> list[tuple]:
+        return self.conn.execute(
+            "SELECT ts, open, high, low, close, ticks, source FROM candles_1m WHERE ts >= ? AND ts < ? ORDER BY ts",
+            (t0, t1),
+        ).fetchall()
 
     def oracle_check(self) -> tuple[int, int]:
         """(agreements, comparisons) between our Chainlink-based predicted

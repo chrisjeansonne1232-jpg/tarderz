@@ -2,7 +2,12 @@
 windows and forced websocket drops, then check what landed in SQLite."""
 
 import asyncio
+import json
 import sqlite3
+import time
+
+import aiohttp
+import pytest
 
 from polybot.app import App
 from polybot.config import Config, SeriesConfig, validate
@@ -33,27 +38,66 @@ def make_config(port: int, db_path: str, log_path: str) -> Config:
     cfg.chainlink.boundary_max_delay_s = 2
     cfg.model.vol_min_live_s = 5
     cfg.watch.print_interval_s = 0.5
-    cfg.watch.snapshot_interval_s = 0.5
+    cfg.strategy.min_seconds_remaining = 1.0
+    cfg.sim.latency_ms = 100
+    cfg.dashboard.dashboard_port = 0  # any free port
+    cfg.markets.gamma_heartbeat_s = 1.0
     validate(cfg)
     return cfg
 
 
+async def _dashboard_client(app: App, seen: dict) -> None:
+    """Connect to the dashboard websocket like the browser does and record traffic."""
+    while app.dashboard is None or app.dashboard.url.endswith(":0"):
+        await asyncio.sleep(0.1)
+    await asyncio.sleep(0.5)
+    url = app.dashboard.url.replace("http://", "ws://") + "/ws"
+    async with aiohttp.ClientSession() as s:
+        async with s.ws_connect(url) as ws:
+            await ws.send_str('{"type":"order","side":"BUY"}')  # must be ignored: read-only
+            t0 = time.time()
+            async for msg in ws:
+                m = json.loads(msg.data)
+                seen.setdefault("order", []).append(m["type"])
+                if m["type"] == "snapshot":
+                    seen["snapshot"] = m
+                if m["type"] == "tick" and t0 + 5 <= time.time() < t0 + 10:
+                    seen["ticks_5_10s"] = seen.get("ticks_5_10s", 0) + 1
+                if time.time() - t0 > 14:
+                    break
+
+
 def test_end_to_end_against_fake_exchange(tmp_path, capsys):
+    seen: dict = {}
+
     async def scenario() -> tuple[App, FakeExchange]:
         fx = FakeExchange({"btc-updown-t6s": 6, "btc-updown-t12s": 12}, resolve_delay_s=1.0, drop_every_s=9)
         runner, port = await fx.start()
         cfg = make_config(port, str(tmp_path / "t.sqlite"), str(tmp_path / "t.log"))
-        app = App(cfg, mode="watch")
+        app = App(cfg, mode="run", dashboard=True)
         task = asyncio.create_task(app.run())
+        client = asyncio.create_task(_dashboard_client(app, seen))
         await asyncio.sleep(RUN_SECONDS)
         app.stop.set()
+        t0 = time.time()
         await asyncio.wait_for(task, timeout=15)
+        seen["shutdown_s"] = time.time() - t0
+        client.cancel()
         await runner.cleanup()
         return app, fx
 
     app, fx = asyncio.run(scenario())
     out = capsys.readouterr().out
-    assert "fair Up" in out and "edge after fee" in out
+    assert "dashboard: http://127.0.0.1:" in out
+    assert seen["shutdown_s"] < 4.0  # clean, prompt Ctrl+C
+
+    # Dashboard protocol: snapshot first, then ~4 Hz ticks plus immediate events.
+    snap = seen["snapshot"]
+    assert seen["order"][0] == "snapshot"
+    assert snap["meta"]["paper"] is True and snap["meta"]["source"] == "realtime"
+    assert snap["meta"]["test_feed"] is True  # not Polymarket's production host
+    assert 14 <= seen["ticks_5_10s"] <= 26
+    assert "log" in seen["order"]
 
     # Every feed was dropped at least once and came back.
     assert app.coinbase.connects >= 2 and app.channel.connects >= 2 and app.chainlink.connects >= 2
@@ -71,7 +115,14 @@ def test_end_to_end_against_fake_exchange(tmp_path, capsys):
     # must match the posted resolution.
     compared = [r for r in resolved if r[2] is not None]
     assert compared and all(r[2] == r[3] for r in compared)
-    n, with_fv = db.execute("SELECT COUNT(*), COUNT(p_up) FROM fv_snapshots").fetchone()
-    assert n > 20 and with_fv > 10
+    n, with_fv = db.execute("SELECT COUNT(*), COUNT(fair_up) FROM snapshots_1s").fetchone()
+    assert n > 30 and with_fv > 10
+    tags = {r[0] for r in db.execute("SELECT DISTINCT tag FROM exec_log")}
+    assert {"MKT", "RECONNECT", "SETTLE"} <= tags
+    # Paper trades that settled carry consistent P&L.
+    for status, pnl, pnl0, fee, payout, cost in db.execute(
+        "SELECT status, pnl, pnl_zero_fee, fee, payout, cost FROM trades WHERE status IN ('WON','LOST')"
+    ):
+        assert pnl == pytest.approx(payout - cost - fee) and pnl0 - pnl == pytest.approx(fee)
     # The Coinbase-Chainlink basis converges to the fake's true offset (+3.00).
     assert abs(app.basis.mean - 3.0) < 1.5

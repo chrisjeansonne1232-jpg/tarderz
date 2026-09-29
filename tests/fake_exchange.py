@@ -63,6 +63,7 @@ class FakeExchange:
         self.cb_seq = 0
         self.stale_fair: dict[str, float] = {}  # lagged fair value per market -> creates "edges"
         self.connections = {"market": 0, "rtds": 0, "coinbase": 0}
+        self.paused_until: dict[str, float] = {}  # feed -> time; simulates a silent stall
         self._tasks: list[asyncio.Task] = []
 
     # --- synthetic world ------------------------------------------------------
@@ -199,6 +200,15 @@ class FakeExchange:
             px = o
         return web.json_response(rows)
 
+    def paused(self, feed: str) -> bool:
+        return time.time() < self.paused_until.get(feed, 0.0)
+
+    async def h_pause(self, req: web.Request) -> web.Response:
+        """Test control: /admin/pause?feed=coinbase|rtds|market&seconds=N"""
+        feed = req.query.get("feed", "")
+        self.paused_until[feed] = time.time() + float(req.query.get("seconds", "10"))
+        return web.json_response({"paused": feed, "until": self.paused_until[feed]})
+
     # --- websockets ---------------------------------------------------------------
     def _drop_deadline(self) -> float:
         if not self.drop_every_s:
@@ -233,6 +243,8 @@ class FakeExchange:
                     await ws.close()
                     return
                 ts = str(int(time.time() * 1000))
+                if self.paused("market"):
+                    continue
                 for t in list(subs):
                     if t not in last_books or t not in self.by_token:
                         continue
@@ -297,6 +309,9 @@ class FakeExchange:
                 if time.time() > deadline:
                     await ws.close()
                     return
+                if self.paused("rtds"):
+                    sent = int(time.time()) - 1
+                    continue
                 # Each whole-second observation is relayed ~0.6 s after it is taken.
                 while sent + 1 in self.oracle and time.time() >= sent + 1 + 0.6:
                     sent += 1
@@ -332,11 +347,19 @@ class FakeExchange:
         sub = json.loads(msg.data)
         assert sub["type"] == "subscribe" and "ticker" in sub["channels"]
         await ws.send_json({"type": "subscriptions", "channels": [{"name": "ticker", "product_ids": sub["product_ids"]}]})
+
+        async def drain() -> None:  # process the client's close frame
+            async for _ in ws:
+                pass
+
+        reader = asyncio.create_task(drain())
         while not ws.closed:
             await asyncio.sleep(0.1)
             if time.time() > deadline:
                 await ws.close()
                 break
+            if self.paused("coinbase"):
+                continue
             self.cb_seq += 1
             px = self.price
             await ws.send_json({
@@ -344,6 +367,7 @@ class FakeExchange:
                 "price": f"{px:.2f}", "best_bid": f"{px - 0.005:.2f}", "best_ask": f"{px + 0.005:.2f}",
                 "side": "buy", "time": iso(time.time(), micros=True), "trade_id": self.cb_seq, "last_size": "0.001",
             })
+        reader.cancel()
         return ws
 
     # --- server ---------------------------------------------------------------------
@@ -359,6 +383,7 @@ class FakeExchange:
         app.router.add_get("/ws/market", self.ws_market)
         app.router.add_get("/rtds", self.ws_rtds)
         app.router.add_get("/coinbase", self.ws_coinbase)
+        app.router.add_get("/admin/pause", self.h_pause)
 
         async def on_startup(_: web.Application) -> None:
             self._tasks.append(asyncio.create_task(self._price_engine()))
@@ -386,7 +411,7 @@ def main() -> None:
     ap.add_argument("--drop-every", type=float, default=None, help="drop websocket connections every ~N seconds")
     args = ap.parse_args()
     fx = FakeExchange({"btc-updown-fake60s": 60, "btc-updown-fake30s": 30}, drop_every_s=args.drop_every)
-    web.run_app(fx.app(), host="127.0.0.1", port=args.port)
+    web.run_app(fx.app(), host="127.0.0.1", port=args.port, shutdown_timeout=0.5)
 
 
 if __name__ == "__main__":

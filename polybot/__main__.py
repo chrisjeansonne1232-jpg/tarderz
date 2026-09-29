@@ -16,6 +16,8 @@ import aiohttp
 
 from .app import App
 from .config import Config, ConfigError, load_config
+from .db import Database
+from .metrics import format_report, summarize
 from .markets import parse_event, resolve_fee_model
 from .rest import ClobClient, GammaClient, HttpError
 from .util import fmt_utc
@@ -37,8 +39,8 @@ def setup_logging(cfg: Config, console_level: str | None = None) -> None:
     root.addHandler(ch)
 
 
-async def run_app(cfg: Config, mode: str) -> None:
-    app = App(cfg, mode)
+async def run_app(cfg: Config, mode: str, dashboard: bool = False) -> None:
+    app = App(cfg, mode, dashboard=dashboard)
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -109,8 +111,12 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="polybot", description="Read-only Polymarket BTC Up/Down paper-trading research bot")
     ap.add_argument("--config", default="config.toml")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("watch", help="stage 1: stream data and show live fair value vs. the book")
+    p_run = sub.add_parser("run", help="paper trade (simulated fills only; never places orders)")
+    p_run.add_argument("--dashboard", action="store_true", help="serve the monitoring dashboard")
+    p_watch = sub.add_parser("watch", help="stream data and show live fair value vs. the book (no trading)")
+    p_watch.add_argument("--dashboard", action="store_true", help="serve the monitoring dashboard")
     sub.add_parser("discover", help="look up the current markets once and print everything we rely on")
+    sub.add_parser("report", help="print paper-trading performance from the database")
     args = ap.parse_args(argv)
     try:
         cfg = load_config(args.config)
@@ -121,11 +127,27 @@ def main(argv: list[str] | None = None) -> int:
         setup_logging(cfg, console_level="WARNING")
         asyncio.run(discover(cfg))
         return 0
-    setup_logging(cfg, console_level="WARNING" if args.cmd == "watch" else None)
+    if args.cmd == "report":
+        return report(cfg)
+    setup_logging(cfg, console_level="WARNING")
     try:
-        asyncio.run(run_app(cfg, args.cmd))
+        asyncio.run(run_app(cfg, args.cmd, dashboard=args.dashboard))
     except KeyboardInterrupt:
         pass
+    return 0
+
+
+def report(cfg: Config) -> int:
+    path = Path(cfg.general.db_path)
+    if not path.exists():
+        print(f"no database at {path}; run `python -m polybot run` first", file=sys.stderr)
+        return 1
+    db = Database(str(path), read_only=True)
+    try:
+        trades = db.all_trades()
+    finally:
+        db.close()
+    print(format_report(summarize(trades, cfg.sim.starting_bankroll, cfg.dashboard.timezone, time.time())))
     return 0
 
 

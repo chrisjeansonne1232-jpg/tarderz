@@ -1,15 +1,21 @@
-"""Wires feeds, market tracking, the fair-value model and output together."""
+"""Wires feeds, market tracking, the fair-value model, the paper engine and
+output (terminal, SQLite, dashboard) together."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
+import zlib
+from collections import deque
 from dataclasses import dataclass
+from typing import Any, Callable
 
 import aiohttp
 
 from .book import OrderBook
+from .candles import CandleBuilder
 from .config import Config
 from .db import Database
 from .fairvalue import BasisEstimator, VolEstimator, annualize, fair_up_probability
@@ -36,26 +42,63 @@ class FairValue:
     p_up: float
 
 
+class _ExecLogHandler(logging.Handler):
+    """Mirror polybot warnings into the execution log (WARN / RECONNECT)."""
+
+    def __init__(self, app: "App") -> None:
+        super().__init__(level=logging.WARNING)
+        self.app = app
+        self._recent: dict[str, float] = {}
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = record.getMessage()
+            now = time.time()
+            if now - self._recent.get(msg, 0.0) < 5.0:
+                return  # identical warning repeated within 5 s
+            self._recent[msg] = now
+            if len(self._recent) > 500:
+                self._recent = {k: v for k, v in self._recent.items() if now - v < 60}
+            tag = "RECONNECT" if record.name == "polybot.ws" else "WARN"
+            self.app.exec_log(tag, msg, echo=False)
+        except Exception:  # noqa: BLE001
+            self.handleError(record)
+
+
 class App:
-    def __init__(self, cfg: Config, mode: str = "watch") -> None:
+    """mode: "watch" (terminal fair-value view, no trading) or "run" (paper trading)."""
+
+    def __init__(self, cfg: Config, mode: str = "watch", dashboard: bool = False) -> None:
         self.cfg = cfg
         self.mode = mode
+        self.dashboard_enabled = dashboard
         self.stop = asyncio.Event()
+        self.started_at = time.time()
         self._cond_to_slug: dict[str, str] = {}
+        self._subscribers: list[Callable[[dict], None]] = []
+        self.log_ring: deque[tuple[float, str, str, str | None]] = deque(maxlen=cfg.dashboard.log_lines)
+        self.candles = CandleBuilder()
+        self.engine = None
+        self.loop_lag_ms = 0.0
+        self.loop_lag_max_ms = 0.0
+        self.db: Database | None = None
 
     # --- lifecycle ------------------------------------------------------------
     async def run(self) -> None:
         cfg = self.cfg
         self.db = Database(cfg.general.db_path)
         self.db.log_event("INFO", "start", None, {"mode": self.mode})
+        handler = _ExecLogHandler(self)
+        logging.getLogger("polybot").addHandler(handler)
         try:
             async with aiohttp.ClientSession(
                 trust_env=True, headers={"User-Agent": cfg.general.user_agent}
             ) as session:
                 self._build(session)
-                await self._bootstrap_vol()
+                await self._bootstrap_history()
                 await self._supervise()
         finally:
+            logging.getLogger("polybot").removeHandler(handler)
             self.db.log_event("INFO", "stop", None, {"mode": self.mode})
             self.db.close()
 
@@ -75,7 +118,11 @@ class App:
             else None
         )
         self.channel = MarketChannel(session, cfg.endpoints.market_ws, cfg.polymarket_ws, on_resolved=self._on_ws_resolved)
+        for feed in (self.coinbase, self.chainlink, self.channel):
+            if feed is not None:
+                feed.on_status = self._on_feed_status
         self.resolver = ResolutionWatcher(cfg.resolution, self.gamma, self._on_resolved)
+        assert self.db is not None
         for slug, market_id, end_ts in self.db.unresolved_markets(time.time()):
             self.resolver.add(slug, market_id, end_ts)
         self.trackers = [
@@ -86,6 +133,18 @@ class App:
             for s in cfg.markets.series
             if s.enabled
         ]
+        if self.mode == "run":
+            from .engine import PaperEngine
+
+            self.engine = PaperEngine(self)
+            self.engine.reconcile_on_start()
+        self.dashboard = None
+        if self.dashboard_enabled:
+            from .dashboard.server import DashboardServer
+            from .dashboard.state import LiveSource
+
+            self.dashboard = DashboardServer(cfg.dashboard, LiveSource(self))
+            self.subscribe(self.dashboard.hub.push)
 
     async def _supervise(self) -> None:
         coros = {
@@ -95,9 +154,15 @@ class App:
             "vol_sampler": self._vol_sampler(),
             "maintenance": self._maintenance(),
             "output": self._output_loop(),
+            "recorder": self._recorder(),
+            "loop_lag": self._loop_lag(),
         }
         if self.chainlink is not None:
             coros["chainlink"] = self.chainlink.run(self.stop)
+        if self.cfg.markets.gamma_heartbeat_s > 0:
+            coros["gamma_heartbeat"] = self._gamma_heartbeat()
+        if self.dashboard is not None:
+            coros["dashboard"] = self.dashboard.serve(self.stop)
         for tr in self.trackers:
             coros[f"tracker:{tr.s.name}"] = tr.run(self.stop)
         tasks = {asyncio.create_task(c, name=n): n for n, c in coros.items()}
@@ -108,6 +173,7 @@ class App:
                 if t is not stop_task:
                     exc = t.exception()
                     log.critical("component %s exited unexpectedly: %r", tasks[t], exc)
+                    assert self.db is not None
                     self.db.log_event("CRITICAL", "component_died", None, f"{tasks[t]}: {exc!r}")
             self.stop.set()
             _, pending = await asyncio.wait(tasks, timeout=5.0)
@@ -119,25 +185,56 @@ class App:
             for t in tasks:
                 t.cancel()
             await asyncio.gather(*tasks, stop_task, return_exceptions=True)
+            if self.engine is not None:
+                await self.engine.shutdown()
 
-    async def _bootstrap_vol(self) -> None:
-        if not self.cfg.model.vol_bootstrap_candles:
-            return
+    async def _bootstrap_history(self) -> None:
+        """Seed vol and the candle chart from Coinbase 1-minute candles."""
         try:
             candles = await self.cb_rest.candles(self.cfg.spot.product_id, 60)
         except HttpError as e:
-            log.warning("vol bootstrap from Coinbase candles failed (%s); waiting for live data", e)
+            log.warning("Coinbase candle bootstrap failed (%s); waiting for live data", e)
             return
         now = time.time()
-        closed = [c for t, c in candles if t + 60 <= now]  # drop the in-progress bar
-        closes = closed[-(int(self.cfg.model.vol_lookback_min) + 1):]
-        n = self.vol.set_bootstrap_from_closes(closes, 60.0)
-        if n and self.vol.bootstrap_var is not None:
-            log.info("vol bootstrap: %d one-minute returns, sigma %.1f%%/yr", n, 100 * annualize(self.vol.bootstrap_var ** 0.5))
+        closed = [c for c in candles if c[0] + 60 <= now]  # drop the in-progress bar
+        self.candles.seed(closed)
+        assert self.db is not None
+        for t, o, h, l, c in closed[-self.candles.closed.maxlen:]:  # type: ignore[index]
+            self.db.upsert_candle(t, o, h, l, c, 0, "rest")
+        if self.cfg.model.vol_bootstrap_candles:
+            closes = [c[4] for c in closed][-(int(self.cfg.model.vol_lookback_min) + 1):]
+            n = self.vol.set_bootstrap_from_closes(closes, 60.0)
+            if n and self.vol.bootstrap_var is not None:
+                log.info("vol bootstrap: %d one-minute returns, sigma %.1f%%/yr", n, 100 * annualize(self.vol.bootstrap_var ** 0.5))
+
+    # --- event bus / execution log -------------------------------------------------------
+    def subscribe(self, fn: Callable[[dict], None]) -> None:
+        self._subscribers.append(fn)
+
+    def publish(self, msg: dict) -> None:
+        for fn in self._subscribers:
+            try:
+                fn(msg)
+            except Exception:  # noqa: BLE001
+                log.exception("subscriber failed")
+
+    def exec_log(self, tag: str, msg: str, ref: str | None = None, echo: bool = True) -> None:
+        """One line of the execution log: memory ring, SQLite, dashboard, file log."""
+        ts = time.time()
+        self.log_ring.append((ts, tag, msg, ref))
+        if self.db is not None:
+            self.db.insert_exec_log(ts, tag, msg, ref)
+        self.publish({"type": "log", "line": [ts, tag, msg, ref]})
+        if echo:
+            log.info("[%s] %s", tag, msg)
 
     # --- feed callbacks -------------------------------------------------------
     def _on_spot(self, tick: SpotTick) -> None:
-        pass  # stage 2 evaluates signals here
+        closed = self.candles.add(tick.exch_ts, tick.last)
+        if closed is not None and self.db is not None:
+            self.db.upsert_candle(closed[0], closed[1], closed[2], closed[3], closed[4], int(closed[5]), "ticks")
+        if self.engine is not None:
+            self.engine.evaluate(time.time())
 
     def _on_oracle(self, tick: OracleTick) -> None:
         last = self.coinbase.history.last()
@@ -147,8 +244,17 @@ class App:
         if cb is not None:
             self.basis.update(tick.obs_ts, cb - tick.value)
 
+    def _on_feed_status(self, name: str, event: str, detail: str) -> None:
+        if event == "connected":
+            feed = {"coinbase": self.coinbase, "chainlink": self.chainlink, "polymarket": self.channel}.get(name)
+            again = feed is not None and feed.connects > 1
+            self.exec_log("RECONNECT", f"{name}: {'reconnected' if again else 'connected'} ({detail})", echo=False)
+
     def _on_discovered(self, w: MarketWindow) -> None:
         self._cond_to_slug[w.condition_id] = w.slug
+        fee = w.fee.describe() if w.fee else "fee ?"
+        rules = "rules verified" if w.rules_ok else "RULES NOT VERIFIED (won't trade): " + "; ".join(w.rules_notes)
+        self.exec_log("MKT", f"{w.slug} · {fmt_hms(w.start_ts)}–{fmt_hms(w.end_ts)}Z · {fee} · {rules}")
 
     def _on_window_ended(self, w: MarketWindow) -> None:
         self.resolver.add(w.slug, w.market_id, w.end_ts)
@@ -160,18 +266,20 @@ class App:
     def _on_ws_resolved(self, msg: dict) -> None:
         slug = self._cond_to_slug.get(str(msg.get("market", "")))
         outcome = str(msg.get("winning_outcome", ""))
-        if slug and outcome:
+        if slug and outcome and self.db is not None:
             self.db.set_ws_resolution(slug, outcome)
 
     def _on_resolved(self, slug: str, outcome: str, detail: dict) -> None:
+        assert self.db is not None
         self.db.set_resolution(slug, outcome, detail)
         row = self.db.conn.execute("SELECT chainlink_predicted FROM markets WHERE slug=?", (slug,)).fetchone()
         predicted = row[0] if row else None
         if predicted and predicted != outcome:
             log.warning("RESOLVED %s: %s, but our Chainlink boundary prices predicted %s", slug, outcome, predicted)
             self.db.log_event("WARN", "oracle_mismatch", slug, {"resolved": outcome, "predicted": predicted})
-        else:
-            log.info("RESOLVED %s: %s (chainlink predicted %s)", slug, outcome, predicted or "n/a")
+        self.exec_log("SETTLE", f"{slug} resolved {outcome.upper()} (Gamma) · Chainlink predicted {(predicted or 'n/a').upper()}")
+        if self.engine is not None:
+            self.engine.settle(slug, outcome)
 
     # --- model ----------------------------------------------------------------
     def fair_value(self, w: MarketWindow, now: float) -> tuple[FairValue | None, str]:
@@ -220,27 +328,100 @@ class App:
             await sleep_or_stop(self.stop, next_t - time.time())
 
     async def _maintenance(self) -> None:
+        last_status = time.time()
         while not self.stop.is_set():
             await self.channel.maintain()
+            now = time.time()
+            if self.engine is not None:
+                self.engine.maintain(now)
+                if now - last_status >= self.cfg.sim.status_interval_s:
+                    last_status = now
+                    line = self.engine.status_line(now)
+                    print(f"{fmt_hms(now)}Z  {line}", flush=True)
+                    log.info("status: %s", line)
             await sleep_or_stop(self.stop, 1.0)
 
+    async def _gamma_heartbeat(self) -> None:
+        """Poll the live market's Gamma record so the Gamma status reflects reality."""
+        while not self.stop.is_set():
+            w = self.primary_window(time.time())
+            if w is not None and w.market_id:
+                try:
+                    await self.gamma.market(w.market_id)
+                except HttpError as e:
+                    log.debug("gamma heartbeat failed: %s", e)
+            await sleep_or_stop(self.stop, self.cfg.markets.gamma_heartbeat_s)
+
+    async def _loop_lag(self) -> None:
+        interval = 0.25
+        window: deque[float] = deque(maxlen=40)
+        while not self.stop.is_set():
+            t0 = time.perf_counter()
+            await asyncio.sleep(interval)
+            lag = max(0.0, (time.perf_counter() - t0 - interval) * 1000.0)
+            window.append(lag)
+            self.loop_lag_ms = lag
+            self.loop_lag_max_ms = max(window)
+
+    async def _recorder(self) -> None:
+        """1-second snapshots of spot and top of book (drives REPLAY)."""
+        step = self.cfg.recorder.interval_s
+        depth = self.cfg.recorder.depth
+        next_t = time.time()
+        while not self.stop.is_set():
+            now = time.time()
+            try:
+                self._record(now, depth)
+            except Exception:  # noqa: BLE001
+                log.exception("recorder failed")
+            next_t += step
+            if next_t < now:
+                next_t = now + step
+            await sleep_or_stop(self.stop, next_t - time.time())
+
+    def _record(self, now: float, depth: int) -> None:
+        assert self.db is not None
+        tick = self.coinbase.last
+        cl = self.chainlink.last if self.chainlink else None
+        est = self.vol.estimate()
+        ages = self.feed_ages(now)
+        for tr in self.trackers:
+            w = tr.current(now)
+            fv = self.fair_value(w, now)[0] if w else None
+            ub = ua = db_ = da = None
+            ladder: dict[str, Any] = {"ages": ages}
+            if w is not None:
+                for key, tok in (("u", w.up_token), ("d", w.down_token)):
+                    b = self.channel.books.get(tok)
+                    if b is not None and b.ready:
+                        v = b.view()
+                        ladder[key + "b"] = [list(x) for x in v.bids[:depth]]
+                        ladder[key + "a"] = [list(x) for x in v.asks[:depth]]
+                ub = ladder.get("ub", [[None]])[0][0] if ladder.get("ub") else None
+                ua = ladder.get("ua", [[None]])[0][0] if ladder.get("ua") else None
+                db_ = ladder.get("db", [[None]])[0][0] if ladder.get("db") else None
+                da = ladder.get("da", [[None]])[0][0] if ladder.get("da") else None
+            blob = zlib.compress(json.dumps(ladder, separators=(",", ":")).encode(), 6)
+            self.db.insert_snapshot_1s((
+                now, tr.s.name, w.slug if w else None, (w.end_ts - now) if w else None,
+                tick.price if tick else None, cl.value if cl else None, self.basis.mean,
+                annualize(est.sigma) if est else None, fv.strike if fv else (w.s0_chainlink if w else None),
+                fv.p_up if fv else None, ub, ua, db_, da, blob,
+            ))
+
     async def _output_loop(self) -> None:
-        cfg = self.cfg.watch
-        last_snap = 0.0
         last_summary = time.time()
         while not self.stop.is_set():
             now = time.time()
             if self.mode == "watch":
                 print(self.render_watch(now), flush=True)
-            if now - last_snap >= cfg.snapshot_interval_s:
-                self._snapshot(now)
-                last_snap = now
             if now - last_summary >= 60.0:
                 self._log_minute_summary()
                 last_summary = now
-            await sleep_or_stop(self.stop, cfg.print_interval_s)
+            await sleep_or_stop(self.stop, self.cfg.watch.print_interval_s)
 
     def _log_minute_summary(self) -> None:
+        assert self.db is not None
         agree, total = self.db.oracle_check()
         log.info(
             "feeds: coinbase %s (%d msgs, %d reconnects) | chainlink %s | polymarket %s (%d msgs, %d reconnects, %d resyncs) | oracle check %d/%d | pending resolutions %d",
@@ -250,36 +431,26 @@ class App:
             self.channel.resyncs, agree, total, len(self.resolver.pending),
         )
 
-    def _snapshot(self, now: float) -> None:
+    # --- helpers for output / dashboard ------------------------------------------------
+    def primary_window(self, now: float) -> MarketWindow | None:
+        name = self.cfg.dashboard.primary_series
         for tr in self.trackers:
-            w = tr.current(now)
-            if w is None:
-                continue
-            fv, _ = self.fair_value(w, now)
-            up = self.channel.books.get(w.up_token)
-            dn = self.channel.books.get(w.down_token)
-            ub, ua = _top(up)
-            db_, da = _top(dn)
-            tick = self.coinbase.last
-            cl = self.chainlink.last if self.chainlink else None
-            self.db.insert_snapshot({
-                "ts": now, "slug": w.slug, "tau": w.end_ts - now,
-                "spot": tick.price if tick else None,
-                "spot_adj": fv.spot_adj if fv else None,
-                "strike": fv.strike if fv else None,
-                "sigma_annual": annualize(fv.sigma) if fv else None,
-                "basis": self.basis.mean,
-                "p_up": fv.p_up if fv else None,
-                "up_bid": ub[0] if ub else None, "up_bid_sz": ub[1] if ub else None,
-                "up_ask": ua[0] if ua else None, "up_ask_sz": ua[1] if ua else None,
-                "down_bid": db_[0] if db_ else None, "down_bid_sz": db_[1] if db_ else None,
-                "down_ask": da[0] if da else None, "down_ask_sz": da[1] if da else None,
-                "spot_age_ms": (now - tick.recv_ts) * 1000 if tick else None,
-                "oracle_age_ms": (now - cl.recv_ts) * 1000 if cl else None,
-                "book_age_ms": (now - up.recv_ts) * 1000 if up and up.ready else None,
-            })
+            if tr.s.name == name:
+                return tr.current(now)
+        return self.trackers[0].current(now) if self.trackers else None
 
-    # --- stage 1 display ----------------------------------------------------------
+    def feed_ages(self, now: float) -> dict[str, float | None]:
+        def age(t: float) -> float | None:
+            return round((now - t) * 1000.0) if t else None
+
+        return {
+            "coinbase": age(self.coinbase.last_data_recv),
+            "chainlink": age(self.chainlink.last_data_recv) if self.chainlink else None,
+            "clob": age(self.channel.last_data_recv),
+            "gamma": age(self.gamma.last_ok),
+        }
+
+    # --- stage 1 terminal display ----------------------------------------------------------
     def render_watch(self, now: float) -> str:
         tick = self.coinbase.last
         cl = self.chainlink.last if self.chainlink else None
@@ -338,12 +509,6 @@ class App:
             if e:
                 edge = "edge after fee: " + " ".join(e)
         return " | ".join(x for x in (head + flag, s0, fair, books, edge) if x)
-
-
-def _top(book: OrderBook | None) -> tuple[tuple[float, float] | None, tuple[float, float] | None]:
-    if book is None or not book.ready:
-        return None, None
-    return book.best_bid(), book.best_ask()
 
 
 def _fmt_book(book: OrderBook | None) -> str:

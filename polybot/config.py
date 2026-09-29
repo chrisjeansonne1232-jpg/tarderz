@@ -52,6 +52,9 @@ class MarketsConfig:
     discover_ahead_s: float = 120.0
     discover_retry_s: float = 5.0
     unsubscribe_after_end_s: float = 20.0
+    # Light poll of the current market on Gamma; keeps the Gamma status honest
+    # (it is a REST API, not a stream). 0 disables.
+    gamma_heartbeat_s: float = 2.0
     # A window is flagged "rules not verified" (and never traded) unless its
     # description contains every one of these terms (case-insensitive).
     required_description_terms: list[str] = field(
@@ -120,9 +123,51 @@ class FeesConfig:
 
 
 @dataclass
+class StrategyConfig:
+    # Signal when (fair - VWAP - fee/share - slippage_allowance) > safety_buffer,
+    # i.e. the ask is below fair by more than fee + slippage + buffer.
+    safety_buffer: float = 0.01  # $ per share
+    slippage_allowance: float = 0.0  # extra $/share assumed on top of book-walk slippage
+    min_seconds_remaining: float = 10.0  # no new entries this close to the window end
+    skip_log_interval_s: float = 5.0  # log at most one skipped opportunity per window+side this often
+
+
+@dataclass
+class SimConfig:
+    starting_bankroll: float = 100.0
+    latency_ms: float = 300.0  # signal -> fill delay; fill uses the book as it is after the delay
+    adverse_move: str = "take"  # book moved against us during latency: "take" the worse price or "skip"
+    max_slippage: float = 0.02  # never pay more than signal ask + this per share (the order's limit)
+    order_type: str = "FAK"  # FAK: partial fills allowed | FOK: all or nothing
+    max_trade_usd: float = 10.0
+    max_window_usd: float = 25.0
+    # Our simulated fills don't remove liquidity from the real book, so the
+    # size we took is hidden from later fills at that price for this long.
+    liquidity_memory_s: float = 10.0
+    status_interval_s: float = 60.0
+
+
+@dataclass
+class RecorderConfig:
+    interval_s: float = 1.0  # 1-second spot + top-of-book snapshots (used by replay)
+    depth: int = 5
+
+
+@dataclass
+class DashboardConfig:
+    dashboard_host: str = "127.0.0.1"  # 0.0.0.0 to view from other devices on your LAN
+    dashboard_port: int = 8787
+    timezone: str = "America/Chicago"
+    primary_series: str = "btc-15m"
+    stale_after_s: float = 3.0
+    tick_hz: float = 4.0
+    log_lines: int = 500
+    signal_window_min: float = 30.0
+
+
+@dataclass
 class WatchConfig:
     print_interval_s: float = 2.0
-    snapshot_interval_s: float = 5.0
 
 
 @dataclass
@@ -136,6 +181,10 @@ class Config:
     polymarket_ws: PolymarketWSConfig = field(default_factory=PolymarketWSConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     fees: FeesConfig = field(default_factory=FeesConfig)
+    strategy: StrategyConfig = field(default_factory=StrategyConfig)
+    sim: SimConfig = field(default_factory=SimConfig)
+    recorder: RecorderConfig = field(default_factory=RecorderConfig)
+    dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     watch: WatchConfig = field(default_factory=WatchConfig)
 
 
@@ -198,6 +247,22 @@ def validate(cfg: Config) -> None:
         raise ConfigError("model.strike_source = 'chainlink' requires chainlink.enabled = true")
     if cfg.model.vol_sample_s <= 0 or cfg.model.vol_lookback_min <= 0:
         raise ConfigError("model.vol_sample_s and model.vol_lookback_min must be > 0")
+    _choice(cfg.sim.adverse_move, ("take", "skip"), "sim.adverse_move")
+    _choice(cfg.sim.order_type, ("FAK", "FOK"), "sim.order_type")
+    if cfg.sim.starting_bankroll <= 0 or cfg.sim.max_trade_usd <= 0 or cfg.sim.max_window_usd <= 0:
+        raise ConfigError("sim.starting_bankroll, max_trade_usd and max_window_usd must be > 0")
+    if cfg.sim.latency_ms < 0 or cfg.sim.max_slippage < 0:
+        raise ConfigError("sim.latency_ms and sim.max_slippage must be >= 0")
+    if cfg.recorder.interval_s <= 0 or cfg.dashboard.tick_hz <= 0:
+        raise ConfigError("recorder.interval_s and dashboard.tick_hz must be > 0")
+    if not any(s.name == cfg.dashboard.primary_series for s in enabled):
+        cfg.dashboard.primary_series = enabled[0].name
+    try:
+        from zoneinfo import ZoneInfo
+
+        ZoneInfo(cfg.dashboard.timezone)
+    except Exception as e:  # noqa: BLE001
+        raise ConfigError(f"dashboard.timezone {cfg.dashboard.timezone!r} is not a valid IANA zone: {e}") from e
 
 
 def load_config(path: str | Path) -> Config:
