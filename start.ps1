@@ -22,49 +22,73 @@ function Stop-WithMessage([string]$msg) {
     exit 1
 }
 
-function Test-Python([string]$exe, [string[]]$pre) {
-    # Returns the interpreter path if it is Python 3.11+, else $null.
-    if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) { return $null }
+function Test-Exe([string]$exe, [string[]]$pre) {
+    # Run an interpreter and return its path if it is Python 3.11+, else $null.
+    # stdin is closed so nothing can sit waiting on a prompt we don't show.
     try {
-        $out = & $exe @pre -c "import sys; print(sys.executable if sys.version_info >= (3, 11) else '')" 2>$null
+        $out = $null | & $exe @pre -c "import sys; print(sys.executable if sys.version_info >= (3, 11) else '')" 2>$null
         if ($LASTEXITCODE -eq 0 -and $out) { return ([string]($out | Select-Object -Last 1)).Trim() }
     } catch { }
     return $null
 }
 
 function Find-Python {
-    $candidates = @(
-        @("py", "-3.13"), @("py", "-3.12"), @("py", "-3.11"), @("py", "-3"),
-        @("python", $null), @("python3", $null)
-    )
-    foreach ($c in $candidates) {
-        $pre = @()
-        if ($c[1]) { $pre = @($c[1]) }
-        $found = Test-Python $c[0] $pre
+    # The Python install manager's "py"/"python" commands silently download a
+    # runtime when none is installed; keep them from doing that while we look.
+    $env:PYTHON_MANAGER_AUTOMATIC_INSTALL = "false"
+    $paths = @()
+    # 1. Standard install folders: python.org (per-user, all-users) and the install manager.
+    $roots = @()
+    if ($env:LOCALAPPDATA) { $roots += @((Join-Path $env:LOCALAPPDATA "Programs\Python"), (Join-Path $env:LOCALAPPDATA "Python")) }
+    if ($env:ProgramFiles) { $roots += $env:ProgramFiles }
+    foreach ($root in $roots) {
+        if (Test-Path -LiteralPath $root) {
+            Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '^(Python3\d+|pythoncore-3\.\d+)' } |
+                Sort-Object Name -Descending |
+                ForEach-Object { $paths += (Join-Path $_.FullName "python.exe") }
+        }
+    }
+    # 2. Whatever python / python3 resolve to on PATH.
+    foreach ($name in @("python", "python3")) {
+        foreach ($cmd in @(Get-Command $name -All -CommandType Application -ErrorAction SilentlyContinue)) {
+            $paths += $cmd.Source
+        }
+    }
+    foreach ($p in $paths) {
+        if (-not (Test-Path -LiteralPath $p)) { continue }
+        $found = Test-Exe $p @()
         if ($found) { return $found }
     }
-    foreach ($v in @("313", "312", "311")) {
-        $p = Join-Path $env:LOCALAPPDATA "Programs\Python\Python$v\python.exe"
-        if ($env:LOCALAPPDATA -and (Test-Path -LiteralPath $p)) { return $p }
+    # 3. The py launcher, last.
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+        $found = Test-Exe "py" @("-3")
+        if ($found) { return $found }
     }
     return $null
 }
 
 # --- 1. Python 3.11+ ---------------------------------------------------------
+Say "looking for Python 3.11 or newer"
 $py = Find-Python
 if (-not $py) {
+    $answer = Read-Host "Python 3.11 or newer is needed. Install Python 3.12 now? [Y/n]"
+    if ($answer -match '^[nN]') { Stop-WithMessage "Python is required. Get it from https://www.python.org/downloads/" }
     if (Get-Command winget -ErrorAction SilentlyContinue) {
-        $answer = Read-Host "Python 3.11 or newer is needed. Install Python 3.12 now with winget? [Y/n]"
-        if ($answer -match '^[nN]') { Stop-WithMessage "Python is required. Get it from https://www.python.org/downloads/" }
+        Say "installing Python 3.12 with winget (a minute or two)"
         winget install --id Python.Python.3.12 -e --scope user --accept-package-agreements --accept-source-agreements
-        $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
-        $py = Find-Python
+    } elseif (Get-Command py -ErrorAction SilentlyContinue) {
+        Say "installing Python 3.12 with the Python install manager"
+        py install 3.12
     }
+    $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
+    $py = Find-Python
     if (-not $py) {
         Stop-WithMessage ("Python 3.11 or newer is needed. Install it from https://www.python.org/downloads/ " +
             "(tick 'Add python.exe to PATH'), then run this again.")
     }
 }
+Say "using $py"
 
 # --- 2. Private environment + dependencies (reinstalled only when they change) --
 if ($onWindows) { $vpy = Join-Path $PSScriptRoot ".venv\Scripts\python.exe" }
