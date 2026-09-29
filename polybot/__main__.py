@@ -112,9 +112,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--config", default="config.toml")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p_run = sub.add_parser("run", help="paper trade (simulated fills only; never places orders)")
-    p_run.add_argument("--dashboard", action="store_true", help="serve the monitoring dashboard")
     p_watch = sub.add_parser("watch", help="stream data and show live fair value vs. the book (no trading)")
-    p_watch.add_argument("--dashboard", action="store_true", help="serve the monitoring dashboard")
+    for p in (p_run, p_watch):
+        p.add_argument("--dashboard", action="store_true", help="serve the monitoring dashboard")
+        p.add_argument("--host", help="dashboard host (overrides dashboard.dashboard_host; 0.0.0.0 = whole LAN)")
+        p.add_argument("--port", type=int, help="dashboard port (overrides dashboard.dashboard_port)")
     sub.add_parser("discover", help="look up the current markets once and print everything we rely on")
     sub.add_parser("report", help="print paper-trading performance from the database")
     args = ap.parse_args(argv)
@@ -129,6 +131,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "report":
         return report(cfg)
+    if getattr(args, "host", None):
+        cfg.dashboard.dashboard_host = args.host
+    if getattr(args, "port", None):
+        cfg.dashboard.dashboard_port = args.port
     setup_logging(cfg, console_level="WARNING")
     try:
         asyncio.run(run_app(cfg, args.cmd, dashboard=args.dashboard))

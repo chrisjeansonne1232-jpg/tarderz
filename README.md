@@ -22,13 +22,41 @@ Monitoring dashboard (`--dashboard`):
 | 3 | Signal map, equity curve, trades table, streak card | |
 | 4 | Analytics histograms, footer polish, `dashboard --replay` | |
 
-## Setup
+## Quick start
+
+**Mac or Linux:** open Terminal and paste this one line:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chrisjeansonne1232-jpg/tarderz/HEAD/install.sh | bash
+```
+
+This one line:
+1. Downloads the bot into `~/polybot`.
+2. Checks for Python 3.11+. On a Mac with Homebrew, it offers to install it.
+3. Sets up a private environment and installs the dependencies.
+4. Checks the live markets.
+5. Starts paper trading with the dashboard and opens http://127.0.0.1:8787 in your browser.
+
+On a Mac it also keeps the computer awake while the bot runs. Press Ctrl+C to stop.
+
+- **Later:** `bash ~/polybot/start.sh`. In Finder you can also double-click
+  `Start Polybot.command` in `~/polybot`.
+- **Update:** paste the same one-liner again. Your `data/` and `config.toml`
+  are kept.
+- **On your iPad too:** `bash ~/polybot/start.sh --ipad`. It prints the
+  address to open in Safari on the same wifi.
+- **Windows:** download the ZIP from GitHub (green Code button), unzip it,
+  and double-click `start.bat`. Add `--ipad` from a command prompt for iPad
+  access.
+
+## Manual setup
 
 Python 3.11+.
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt          # aiohttp, fastapi, uvicorn, websockets
+python -m polybot run --dashboard        # --host 0.0.0.0 to allow other devices
 ```
 
 All settings live in `config.toml`. There are no secrets to configure.
