@@ -1,0 +1,33 @@
+# Points polybot at the local fake exchange (python -m tests.fake_exchange).
+[general]
+db_path = "data/fake.sqlite"
+log_file = "data/fake.log"
+
+[endpoints]
+gamma = "http://127.0.0.1:8765/gamma"
+clob = "http://127.0.0.1:8765/clob"
+market_ws = "ws://127.0.0.1:8765/ws/market"
+rtds_ws = "ws://127.0.0.1:8765/rtds"
+coinbase_ws = "ws://127.0.0.1:8765/coinbase"
+coinbase_rest = "http://127.0.0.1:8765/coinbase-rest"
+
+[markets]
+discover_ahead_s = 10
+unsubscribe_after_end_s = 8
+
+[[markets.series]]
+name = "fake-60s"
+slug_prefix = "btc-updown-fake60s"
+interval_s = 60
+
+[[markets.series]]
+name = "fake-30s"
+slug_prefix = "btc-updown-fake30s"
+interval_s = 30
+
+[resolution]
+first_poll_after_end_s = 5
+poll_s = 2
+
+[model]
+vol_min_live_s = 10

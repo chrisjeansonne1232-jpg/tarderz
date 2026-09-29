@@ -1,0 +1,85 @@
+# polybot configuration — the only settings file. No secrets: every endpoint
+# used is public and read-only. There is no order-placement code in this project.
+
+[general]
+db_path = "data/paperbot.sqlite"
+log_file = "data/paperbot.log"
+log_level = "INFO"
+user_agent = "polymarket-paperbot/0.1 (read-only research)"
+http_timeout_s = 10.0
+
+[endpoints]
+gamma = "https://gamma-api.polymarket.com"
+clob = "https://clob.polymarket.com"
+market_ws = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+rtds_ws = "wss://ws-live-data.polymarket.com"          # Chainlink BTC/USD relay (resolution source)
+coinbase_ws = "wss://ws-feed.exchange.coinbase.com"    # fast spot feed, US-accessible
+coinbase_rest = "https://api.exchange.coinbase.com"    # 1-minute candles for vol warm-up
+
+[markets]
+discover_ahead_s = 120          # look up the next window this long before rollover
+discover_retry_s = 5
+unsubscribe_after_end_s = 20
+# Never trade a window unless its description contains all of these:
+required_description_terms = ["Chainlink", "greater than or equal"]
+
+[[markets.series]]
+name = "btc-15m"
+slug_prefix = "btc-updown-15m"          # event slug = btc-updown-15m-<window start, unix s>
+series_slug = "btc-up-or-down-15m"      # fallback discovery path
+interval_s = 900
+enabled = true
+
+[[markets.series]]
+name = "btc-5m"
+slug_prefix = "btc-updown-5m"
+series_slug = "btc-up-or-down-5m"
+interval_s = 300
+enabled = true
+
+[resolution]
+first_poll_after_end_s = 15
+poll_s = 15                     # poll Gamma this often for the first hour after close
+fast_window_s = 3600
+slow_poll_s = 300               # then this often, until Polymarket posts it
+
+[spot]
+product_id = "BTC-USD"
+price_source = "mid"            # "mid" (best bid/ask midpoint) or "last" trade
+stale_s = 30                    # no fair value if Coinbase is quiet this long
+history_s = 3600
+
+[chainlink]
+enabled = true
+topic = "crypto_prices_chainlink"
+symbol = "btc/usd"
+ping_interval_s = 5
+stale_s = 30
+boundary_max_delay_s = 5        # max lateness of the tick used as a window's start/end price
+
+[polymarket_ws]
+ping_interval_s = 10            # docs: send PING every 10 s
+stale_s = 60
+desync_resync_s = 5
+
+[model]
+vol_lookback_min = 30           # N minutes of realized vol
+vol_sample_s = 1.0
+vol_min_live_s = 120
+vol_bootstrap_candles = true    # seed vol from Coinbase 1-minute candles at startup
+vol_floor_annual = 0.10
+strike_source = "chainlink"     # S0 = Chainlink price at window start (what resolution uses)
+basis_correction = true         # S = Coinbase - EWMA(Coinbase - Chainlink)
+basis_halflife_s = 120
+basis_noise_bps = 0.0           # extra uncertainty for Coinbase/Chainlink gap; 0 = your exact formula
+
+[fees]
+source = "clob"                 # "clob" (/clob-markets fd), "gamma" (feeSchedule), or "fixed"
+fixed_rate = 0.07               # fallback only
+fixed_exponent = 1.0
+round_decimals = 5
+buy_fee_in = "collateral"       # V2 SDKs charge the buy fee in pUSD on top of notional
+
+[watch]
+print_interval_s = 2
+snapshot_interval_s = 5         # fair value + top of book written to SQLite this often
