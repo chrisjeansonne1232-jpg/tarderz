@@ -68,10 +68,11 @@ class _ExecLogHandler(logging.Handler):
 class App:
     """mode: "watch" (terminal fair-value view, no trading) or "run" (paper trading)."""
 
-    def __init__(self, cfg: Config, mode: str = "watch", dashboard: bool = False) -> None:
+    def __init__(self, cfg: Config, mode: str = "watch", dashboard: bool = False, open_browser: bool = False) -> None:
         self.cfg = cfg
         self.mode = mode
         self.dashboard_enabled = dashboard
+        self.open_browser = open_browser
         self.stop = asyncio.Event()
         self.started_at = time.time()
         self._cond_to_slug: dict[str, str] = {}
@@ -143,7 +144,7 @@ class App:
             from .dashboard.server import DashboardServer
             from .dashboard.state import LiveSource
 
-            self.dashboard = DashboardServer(cfg.dashboard, LiveSource(self))
+            self.dashboard = DashboardServer(cfg.dashboard, LiveSource(self), open_browser=self.open_browser)
             self.subscribe(self.dashboard.hub.push)
 
     async def _supervise(self) -> None:

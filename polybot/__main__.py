@@ -29,7 +29,7 @@ def setup_logging(cfg: Config, console_level: str | None = None) -> None:
     fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
     fmt.converter = time.gmtime
     Path(cfg.general.log_file).parent.mkdir(parents=True, exist_ok=True)
-    fh = RotatingFileHandler(cfg.general.log_file, maxBytes=20_000_000, backupCount=5)
+    fh = RotatingFileHandler(cfg.general.log_file, maxBytes=20_000_000, backupCount=5, encoding="utf-8")
     fh.setLevel(cfg.general.log_level.upper())
     fh.setFormatter(fmt)
     root.addHandler(fh)
@@ -39,8 +39,18 @@ def setup_logging(cfg: Config, console_level: str | None = None) -> None:
     root.addHandler(ch)
 
 
-async def run_app(cfg: Config, mode: str, dashboard: bool = False) -> None:
-    app = App(cfg, mode, dashboard=dashboard)
+def keep_awake() -> None:
+    """Stop Windows from sleeping while the bot runs (macOS: start.sh uses caffeinate).
+    The request ends automatically when the process exits."""
+    if sys.platform == "win32":
+        import ctypes
+
+        ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+
+
+async def run_app(cfg: Config, mode: str, dashboard: bool = False, open_browser: bool = False) -> None:
+    app = App(cfg, mode, dashboard=dashboard, open_browser=open_browser)
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -117,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--dashboard", action="store_true", help="serve the monitoring dashboard")
         p.add_argument("--host", help="dashboard host (overrides dashboard.dashboard_host; 0.0.0.0 = whole LAN)")
         p.add_argument("--port", type=int, help="dashboard port (overrides dashboard.dashboard_port)")
+        p.add_argument("--open", action="store_true", help="open the dashboard in your browser once it is up")
     sub.add_parser("discover", help="look up the current markets once and print everything we rely on")
     sub.add_parser("report", help="print paper-trading performance from the database")
     args = ap.parse_args(argv)
@@ -136,8 +147,9 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "port", None):
         cfg.dashboard.dashboard_port = args.port
     setup_logging(cfg, console_level="WARNING")
+    keep_awake()
     try:
-        asyncio.run(run_app(cfg, args.cmd, dashboard=args.dashboard))
+        asyncio.run(run_app(cfg, args.cmd, dashboard=args.dashboard, open_browser=args.open and args.dashboard))
     except KeyboardInterrupt:
         pass
     return 0

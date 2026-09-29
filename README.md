@@ -24,6 +24,25 @@ Monitoring dashboard (`--dashboard`):
 
 ## Quick start
 
+**Windows:** open PowerShell (Start menu → type "PowerShell" → Enter) and
+paste this one line:
+
+```powershell
+irm https://raw.githubusercontent.com/chrisjeansonne1232-jpg/tarderz/HEAD/install.ps1 | iex
+```
+
+This one line:
+1. Installs the bot into `C:\Users\<you>\polybot`. If you don't have Python
+   3.11+, it offers to install it with winget.
+2. Sets up the bot and checks the live markets.
+3. Starts paper trading and opens the dashboard in your browser.
+4. Adds **Polybot** and **Polybot (iPad)** shortcuts to your desktop for next
+   time.
+
+It also keeps the PC from sleeping while the bot runs. Keep the window open;
+Ctrl+C stops the bot. Paste the same line again to update; your settings and
+data are kept.
+
 **Mac or Linux:** open Terminal and paste this one line:
 
 ```bash
@@ -45,9 +64,6 @@ On a Mac it also keeps the computer awake while the bot runs. Press Ctrl+C to st
   are kept.
 - **On your iPad too:** `bash ~/polybot/start.sh --ipad`. It prints the
   address to open in Safari on the same wifi.
-- **Windows:** download the ZIP from GitHub (green Code button), unzip it,
-  and double-click `start.bat`. Add `--ipad` from a command prompt for iPad
-  access.
 
 ## Manual setup
 

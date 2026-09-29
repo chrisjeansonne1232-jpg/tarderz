@@ -12,7 +12,9 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import socket
+import webbrowser
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -94,10 +96,34 @@ class _InLoopServer(uvicorn.Server):
         yield
 
 
+def lan_ip() -> str:
+    """This computer's address on the local network (no packets are sent)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 80))  # TEST-NET address; only picks the outgoing interface
+            return s.getsockname()[0]
+    except OSError:
+        return "<this computer's IP>"
+
+
+def _open_when_up(server: uvicorn.Server, url: str) -> None:
+    import time
+
+    for _ in range(100):
+        if server.started:
+            break
+        time.sleep(0.1)
+    try:
+        webbrowser.open(url)
+    except Exception:  # noqa: BLE001 - no browser available is fine
+        pass
+
+
 class DashboardServer:
-    def __init__(self, cfg: DashboardConfig, source: Source) -> None:
+    def __init__(self, cfg: DashboardConfig, source: Source, open_browser: bool = False) -> None:
         self.cfg = cfg
         self.source = source
+        self.open_browser = open_browser
         self.hub = Hub(source, cfg.tick_hz)
         self.app = self._make_app()
         self.url = f"http://{cfg.dashboard_host}:{cfg.dashboard_port}"
@@ -143,7 +169,11 @@ class DashboardServer:
         host, port = self.cfg.dashboard_host, self.cfg.dashboard_port
         family = socket.AF_INET6 if ":" in host else socket.AF_INET
         sock = socket.socket(family, socket.SOCK_STREAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if os.name == "nt":
+            # On Windows SO_REUSEADDR would let a second bot share the port silently.
+            sock.setsockopt(socket.SOL_SOCKET, getattr(socket, "SO_EXCLUSIVEADDRUSE", socket.SO_REUSEADDR), 1)
+        else:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind((host, port))
         except OSError as e:
@@ -164,11 +194,14 @@ class DashboardServer:
         server = _InLoopServer(config)
         server_task = asyncio.create_task(server.serve(sockets=[sock]))
         ticker = asyncio.create_task(self.hub.ticker(stop))
-        hint = ""
+        port = sock.getsockname()[1]
+        local_url = f"http://127.0.0.1:{port}"
+        print(f"dashboard: {local_url}", flush=True)
         if self.cfg.dashboard_host in ("0.0.0.0", "::"):
-            hint = "  (listening on all interfaces: open http://<this computer's LAN IP>:" f"{self.cfg.dashboard_port} on your iPad)"
-        print(f"dashboard: {self.url}{hint}", flush=True)
+            print(f"dashboard on other devices (same wifi): http://{lan_ip()}:{port}", flush=True)
         log.info("dashboard listening on %s", self.url)
+        if self.open_browser:
+            asyncio.get_running_loop().run_in_executor(None, _open_when_up, server, local_url)
         stop_wait = asyncio.create_task(stop.wait())
         try:
             done, _ = await asyncio.wait([server_task, stop_wait], return_when=asyncio.FIRST_COMPLETED)
