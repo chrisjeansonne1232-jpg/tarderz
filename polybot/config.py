@@ -160,6 +160,14 @@ class RecorderConfig:
 
 
 @dataclass
+class WhatIfConfig:
+    enabled: bool = True
+    # Extra paper wallets that take the same signals with these order delays.
+    latencies_ms: list[int] = field(default_factory=lambda: [0, 50, 300])
+    starting_bankroll: float = 1000.0  # large, so running out of cash never cuts a comparison short
+
+
+@dataclass
 class ArchiveConfig:
     enabled: bool = True
     dir: str = "data/archive"  # one folder per day of CSV files (open in Excel)
@@ -198,6 +206,7 @@ class Config:
     sim: SimConfig = field(default_factory=SimConfig)
     recorder: RecorderConfig = field(default_factory=RecorderConfig)
     archive: ArchiveConfig = field(default_factory=ArchiveConfig)
+    whatif: WhatIfConfig = field(default_factory=WhatIfConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     watch: WatchConfig = field(default_factory=WatchConfig)
 
@@ -229,6 +238,9 @@ def _build(cls: type, data: Any, path: str) -> Any:
         elif typ == list[str]:
             if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
                 raise ConfigError(f"{where} must be a list of strings")
+        elif typ == list[int]:
+            if not isinstance(value, list) or not all(isinstance(v, int) and not isinstance(v, bool) for v in value):
+                raise ConfigError(f"{where} must be a list of whole numbers")
         elif typ in _SCALARS:
             if typ is float and isinstance(value, int) and not isinstance(value, bool):
                 value = float(value)
@@ -267,6 +279,11 @@ def validate(cfg: Config) -> None:
         raise ConfigError("sim.starting_bankroll, max_trade_usd and max_window_usd must be > 0")
     if cfg.sim.latency_ms < 0 or cfg.sim.max_slippage < 0:
         raise ConfigError("sim.latency_ms and sim.max_slippage must be >= 0")
+    lat = cfg.whatif.latencies_ms
+    if any(v < 0 or v > 60_000 for v in lat) or len(set(lat)) != len(lat) or len(lat) > 8:
+        raise ConfigError("whatif.latencies_ms: up to 8 distinct values between 0 and 60000")
+    if cfg.whatif.starting_bankroll <= 0:
+        raise ConfigError("whatif.starting_bankroll must be > 0")
     if cfg.archive.interval_min <= 0 or not cfg.archive.dir:
         raise ConfigError("archive.interval_min must be > 0 and archive.dir non-empty")
     if cfg.recorder.interval_s <= 0 or cfg.dashboard.tick_hz <= 0:

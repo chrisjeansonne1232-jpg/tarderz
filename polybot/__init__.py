@@ -1,3 +1,3 @@
 """Read-only paper-trading research bot for Polymarket BTC Up/Down markets."""
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

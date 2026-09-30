@@ -144,7 +144,7 @@ def test_end_to_end_against_fake_exchange(tmp_path, capsys):
     assert counts.get("checked", 0) > 50
     assert counts["checked"] >= sum(counts.get(k, 0) for k in ("no_edge", "in_flight", "below_fee", "below_buffer",
                                                                 "too_late", "window_cap", "no_cash", "no_depth", "signal"))
-    n_trades = db.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+    n_trades = db.execute("SELECT COUNT(*) FROM trades WHERE COALESCE(wallet, 'main') = 'main'").fetchone()[0]
     assert counts.get("filled", 0) == n_trades
     assert counts.get("signal", 0) >= counts.get("filled", 0) + counts.get("fill_skipped", 0)
     arch = tmp_path / "archive"
@@ -153,11 +153,23 @@ def test_end_to_end_against_fake_exchange(tmp_path, capsys):
                                                                   "windows.csv", "log.csv"))
     run_archive(str(tmp_path / "t.sqlite"), arch, app.cfg.dashboard.timezone, time.time())
     with open(arch / "all_trades.csv", encoding="utf-8-sig") as f:
-        assert sum(1 for _ in csv.reader(f)) - 1 == db.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+        assert sum(1 for _ in csv.reader(f)) - 1 == n_trades
+    with open(arch / "whatif_trades.csv", encoding="utf-8-sig") as f:
+        assert sum(1 for _ in csv.reader(f)) - 1 == db.execute(
+            "SELECT COUNT(*) FROM trades WHERE wallet LIKE 'whatif-%'").fetchone()[0]
     rows = []
     for d in days:
         with open(d / "windows.csv", encoding="utf-8-sig") as f:
             rows += list(csv.DictReader(f))
     assert rows and any(int(r["checked"]) > 0 for r in rows)
+    # Latency what-if wallets: separate books, each filling after its own delay.
+    assert all(t.wallet == "main" for t in app.engine.trades)
+    assert [e.wallet for e in app.whatif] == ["whatif-0ms", "whatif-50ms", "whatif-300ms"]
+    for eng in app.whatif:
+        rows = db.execute("SELECT latency_ms, status FROM trades WHERE wallet = ?", (eng.wallet,)).fetchall()
+        assert rows, eng.wallet
+        assert all(lat < eng.latency_ms + 60 for lat, _ in rows) and all(lat >= eng.latency_ms - 1 for lat, _ in rows)
+        assert eng.cash() > 0 and eng.starting == 1000.0
+    assert db.execute("SELECT COUNT(*) FROM exec_log WHERE msg LIKE '%whatif%'").fetchone()[0] == 0  # quiet
     # The Coinbase-Chainlink basis converges to the fake's true offset (+3.00).
     assert abs(app.basis.mean - 3.0) < 1.5

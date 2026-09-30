@@ -104,6 +104,16 @@ max_window_usd = 25.0           # max cost per market window (both sides)
 liquidity_memory_s = 10         # size we "took" stays hidden from later fills at that price this long
 status_interval_s = 60          # one-line status in `run` mode
 
+[whatif]
+# "Would faster orders help?" Extra paper wallets take exactly the same signals
+# as the main wallet but fill after these delays. Each starts with its own
+# bankroll (large, so cash never runs out and cuts the comparison short) and
+# uses the same per-trade and per-window caps as [sim]. 300 ms = the control
+# (same delay as the main wallet, same start time as the others).
+enabled = true
+latencies_ms = [0, 50, 300]
+starting_bankroll = 1000.0
+
 [recorder]
 interval_s = 1.0                # spot + order-book snapshot for replay
 depth = 5                       # book levels per side stored

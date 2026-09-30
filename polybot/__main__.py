@@ -18,7 +18,7 @@ from . import __version__
 from .app import App
 from .config import Config, ConfigError, load_config
 from .db import Database
-from .metrics import format_report, summarize
+from .metrics import format_report, format_whatif, summarize
 from .markets import parse_event, resolve_fee_model
 from .rest import ClobClient, GammaClient, HttpError
 from .util import fmt_utc
@@ -174,6 +174,8 @@ def report(cfg: Config) -> int:
     db = Database(str(path), read_only=True)
     try:
         trades = db.all_trades()
+        whatif = {w: db.all_trades(w) for w in db.wallets() if w != "main"}
+        since = {w: db.wallet_since(w) for w in whatif}
         agree, total = db.oracle_check()
         try:
             s0 = db.s0_check()
@@ -182,6 +184,20 @@ def report(cfg: Config) -> int:
     finally:
         db.close()
     print(format_report(summarize(trades, cfg.sim.starting_bankroll, cfg.dashboard.timezone, time.time())))
+    if whatif:
+        print()
+        now = time.time()
+        common = max((v for v in since.values() if v is not None), default=None)
+        rows = []
+        for w, ts in sorted(whatif.items(), key=lambda kv: int("".join(c for c in kv[0] if c.isdigit()) or 0)):
+            ts = [t for t in ts if common is None or t["ts_signal"] >= common]
+            ms = w.removeprefix("whatif-")
+            ctl = " (control)" if ms == f"{cfg.sim.latency_ms:g}ms" else ""
+            rows.append({"label": f"{ms}{ctl}", "stats": summarize(ts, cfg.whatif.starting_bankroll, cfg.dashboard.timezone, now)})
+        main = [t for t in trades if common is None or t["ts_signal"] >= common]
+        rows.append({"label": f"main wallet ({cfg.sim.latency_ms:g}ms)",
+                     "stats": summarize(main, cfg.sim.starting_bankroll, cfg.dashboard.timezone, now)})
+        print(format_whatif(rows, common, cfg.dashboard.timezone))
     print()
     print("DATA CHECKS")
     print(f"  outcome check          {agree}/{total} windows: our Chainlink start/end prices predicted Polymarket's result")

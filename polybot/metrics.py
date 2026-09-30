@@ -34,6 +34,30 @@ def _get(t: Any, k: str) -> Any:
     return t[k] if isinstance(t, dict) else getattr(t, k)
 
 
+def mean_ci(vals: list[float]) -> tuple[float | None, list[float] | None]:
+    """Mean and two-sided 95% t confidence interval."""
+    n = len(vals)
+    if not n:
+        return None, None
+    m = sum(vals) / n
+    if n < 2:
+        return m, None
+    sd = math.sqrt(sum((v - m) ** 2 for v in vals) / (n - 1))
+    half = t_crit_95(n - 1) * sd / math.sqrt(n)
+    return m, [m - half, m + half]
+
+
+def by_window(settled: list[Any]) -> dict[str, Any]:
+    """P&L per market window. Trades in the same window win or lose together,
+    so windows, not trades, are the independent samples."""
+    per: dict[Any, float] = {}
+    for i, t in enumerate(settled):
+        key = (t.get("slug") if isinstance(t, dict) else getattr(t, "slug", None)) or ("trade", i)
+        per[key] = per.get(key, 0.0) + float(_get(t, "pnl") or 0.0)
+    m, ci = mean_ci(list(per.values()))
+    return {"n": len(per), "mean_pnl": m, "ci95": ci}
+
+
 def summarize(trades: Iterable[Any], starting: float, tz: str, now: float) -> dict[str, Any]:
     trades = list(trades)
     settled = sorted((t for t in trades if _get(t, "status") in ("WON", "LOST")), key=lambda t: _get(t, "settled_ts") or 0)
@@ -109,6 +133,7 @@ def summarize(trades: Iterable[Any], starting: float, tz: str, now: float) -> di
         "mean_pnl": mean,
         "sd_pnl": sd,
         "ci95": ci,
+        "by_window": by_window(settled),
         "avg_edge_entry": (sum(float(_get(t, "edge_entry")) for t in settled) / n) if n else None,
         "avg_realized_per_share": per_share(pnls, shares),
         "streak": streak,
@@ -158,9 +183,40 @@ def format_report(s: dict[str, Any]) -> str:
         f"  avg P&L per trade      {money(s['mean_pnl'])}"
         + (f"   95% CI [{ci[0]:+.3f}, {ci[1]:+.3f}]" if ci else "   95% CI n/a (need ≥ 2 settled trades)"),
     ]
-    if ci:
-        verdict = ("CI excludes 0: positive edge" if ci[0] > 0 else
-                   "CI excludes 0: negative edge" if ci[1] < 0 else
+    bw = s.get("by_window") or {}
+    wci = bw.get("ci95")
+    if bw.get("mean_pnl") is not None:
+        lines.append(f"  avg P&L per window     {money(bw['mean_pnl'])}   over {bw['n']} market windows"
+                     + (f"   95% CI [{wci[0]:+.3f}, {wci[1]:+.3f}]" if wci else ""))
+        lines.append("                         (trades in the same window win or lose together, so this range is the honest one)")
+    ci_used = wci or ci
+    if ci_used:
+        verdict = ("CI excludes 0: positive edge" if ci_used[0] > 0 else
+                   "CI excludes 0: negative edge" if ci_used[1] < 0 else
                    "CI includes 0: no statistically reliable edge yet")
         lines.append(f"  → {verdict}")
     return "\n".join(lines)
+
+
+def format_whatif(rows: list[dict[str, Any]], since: float | None, tz: str) -> str:
+    """Side-by-side comparison of the latency what-if wallets (see `report`)."""
+    if not rows:
+        return "LATENCY WHAT-IF\n  no what-if wallets have traded yet"
+    when = datetime.fromtimestamp(since, ZoneInfo(tz)).strftime("%Y-%m-%d %H:%M") if since else "?"
+    lines = [
+        f"LATENCY WHAT-IF  (same rules, orders filled after each delay; trades since {when} {tz})",
+        f"  {'wallet':<22} {'trades':>6} {'won':>11} {'net P&L':>10} {'zero-fee':>10} {'windows':>7}  per-window P&L, 95% range",
+    ]
+    for r in rows:
+        s = r["stats"]
+        bw = s["by_window"]
+        won = f"{s['wins']}/{s['settled']}" + (f" {100 * s['win_rate']:.0f}%" if s["win_rate"] is not None else "")
+        rng = (f"{bw['mean_pnl']:+.2f}" + (f" [{bw['ci95'][0]:+.2f}, {bw['ci95'][1]:+.2f}]" if bw["ci95"] else "")
+               if bw["mean_pnl"] is not None else "n/a")
+        lines.append(f"  {r['label']:<22} {s['trades']:>6} {won:>11} {s['net_pnl']:>+10.2f} {s['zero_fee_pnl']:>+10.2f} {bw['n']:>7}  {rng}")
+    lines += [
+        "  Faster orders only matter if the faster rows beat the control clearly and their",
+        "  per-window range sits above 0. Overlapping ranges = no demonstrated difference yet.",
+    ]
+    return "\n".join(lines)
+

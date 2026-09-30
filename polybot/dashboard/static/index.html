@@ -112,6 +112,16 @@ body {
 .stats4 .sub, .wallet .sub { font-size: 9px; color: var(--dim); font-weight: 400; }
 .wallet .foot { font-size: var(--fs-s); color: var(--dim); }
 
+/* ---------- analytics: latency what-if ---------- */
+.wi { display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
+#wi-tbl { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+#wi-tbl th { font-size: 8.5px; color: var(--dim); font-weight: 400; letter-spacing: .08em; text-transform: uppercase; text-align: right; padding: 0 0 3px 6px; white-space: nowrap; }
+#wi-tbl td { text-align: right; padding: 1px 0 1px 6px; white-space: nowrap; }
+#wi-tbl th:first-child, #wi-tbl td:first-child { text-align: left; padding-left: 0; }
+#wi-tbl td .sub { font-size: 9px; color: var(--dim); }
+#wi-tbl tr.ctl td:first-child { color: var(--dim); }
+.wi-note { font-size: 9px; color: var(--dim); line-height: 1.45; }
+
 /* ---------- execution log ---------- */
 .log .pb { padding: 0; display: flex; }
 #log { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 2px 9px 6px; font-size: 10.5px; line-height: 1.5; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
@@ -132,6 +142,8 @@ body {
 /* ---------- footer ---------- */
 #ftr { display: flex; align-items: center; gap: 18px; padding: 0 12px; border-top: 1px solid var(--line); font-size: var(--fs-s); color: var(--dim); white-space: nowrap; overflow: hidden; }
 #ftr b { color: var(--text); font-weight: 400; }
+
+@media (max-width: 1479px) { .brand .ver { display: none; } }  /* the footer always shows the version */
 
 /* ---------- iPad landscape and narrower laptops ---------- */
 @media (max-width: 1320px) {
@@ -241,8 +253,14 @@ body {
         <div class="pb"><div class="empty">trade table — dashboard stage 3</div></div>
       </section>
       <section class="panel" id="p-analytics" data-feeds="">
-        <div class="ph">Analytics<span class="stale-tag">STALE</span></div>
-        <div class="pb"><div class="empty">edge / P&amp;L / slippage / latency histograms — dashboard stage 4</div></div>
+        <div class="ph">Analytics · latency what-if<span class="r mut num" id="wi-since"></span><span class="stale-tag">STALE</span></div>
+        <div class="pb wi">
+          <table id="wi-tbl">
+            <thead><tr><th>delay</th><th>trades</th><th>win</th><th>net P&amp;L</th><th title="same trades, no fees">0-fee</th><th title="average net P&amp;L per market window, ± its 95% range">$/window ±95%</th></tr></thead>
+            <tbody id="wi-body"></tbody>
+          </table>
+          <div class="wi-note" id="wi-note"></div>
+        </div>
       </section>
     </div>
 
@@ -257,6 +275,7 @@ body {
   </main>
 
   <footer id="ftr">
+    <span id="f-ver" class="num"></span>
     <span id="f-conn">connecting…</span>
     <span id="f-rest" data-feeds=""></span>
   </footer>
@@ -299,7 +318,7 @@ function mmss(s) { if (s == null || !isFinite(s)) return "--:--"; s = Math.max(0
 
 // ---------- formatting ----------
 const MINUS = "−";
-function signed(x, d) { return (x > 0 ? "+" : x < 0 ? MINUS : "") + Math.abs(x).toFixed(d); }
+function signed(x, d) { const a = Math.abs(x).toFixed(d); return (Number(a) === 0 ? "" : x > 0 ? "+" : MINUS) + a; }  // no "-0.00"
 function usd(x, sign) { if (x == null) return "—"; const s = sign ? (x > 0 ? "+" : x < 0 ? MINUS : "") : (x < 0 ? MINUS : ""); return s + "$" + Math.abs(x).toFixed(2); }
 function pct(x, d = 1, sign = false) { return x == null ? "—" : (sign ? signed(100 * x, d) : (100 * x).toFixed(d)) + "%"; }
 function cents(x) { return x == null ? "—" : signed(100 * x, 1) + "¢"; }
@@ -389,6 +408,7 @@ function buildStatic() {
   $("b-replay").classList.toggle("hidden", m.source !== "replay");
   $("b-test").classList.toggle("hidden", !m.test_feed);
   setText($("h-ver"), m.version ? "v" + m.version : "");
+  setText($("f-ver"), m.version ? "polybot v" + m.version : "");
   $("b-test").title = "Endpoints point at " + m.endpoint_host + ", not Polymarket production";
   $("b-off").classList.toggle("hidden", !!m.trading);
   const feeds = $("h-feeds"); feeds.innerHTML = "";
@@ -486,6 +506,36 @@ function renderWallet() {
   }
 }
 
+function ciText(ci) { return ci ? `[${signed(ci[0], 2)}, ${signed(ci[1], 2)}]` : ""; }
+function renderWhatIf() {
+  const wi = S.tick && S.tick.whatif;
+  const body = $("wi-body");
+  if (!wi || !wi.length) {
+    setText($("wi-note"), S.meta && S.meta.trading ? "what-if wallets are off ([whatif] in config.toml)" : "engine off in watch mode");
+    if (body._h !== "") { body.innerHTML = ""; body._h = ""; }
+    return;
+  }
+  const main = S.meta.latency_ms;
+  let h = "";
+  for (const w of wi) {
+    const ctl = Math.round(w.latency_ms) === Math.round(main);
+    const win = w.settled ? pct(w.wins / w.settled, 0) : "—";
+    const half = w.window_ci95 ? (w.window_ci95[1] - w.window_ci95[0]) / 2 : null;
+    const pw = w.window_mean == null ? "—" : `<span class="${pnlClass(w.window_mean)}">${signed(w.window_mean, 1)}</span>`
+      + (half != null ? `<span class="sub"> ±${half.toFixed(1)}</span>` : "");
+    const tip = `${w.trades} trades (${w.open} open) · won ${w.wins}/${w.settled} · ${w.windows} windows`
+      + (w.window_ci95 ? ` · per-window 95% range ${ciText(w.window_ci95)}` : "");
+    h += `<tr class="${ctl ? "ctl" : ""}" title="${tip}"><td>${Math.round(w.latency_ms)} ms${ctl ? " ctl" : ""}</td>`
+      + `<td>${w.trades}</td><td>${win}</td>`
+      + `<td class="${pnlClass(w.net_pnl)}">${usd(w.net_pnl, true)}</td><td class="sub">${usd(w.zero_fee_pnl, true)}</td><td>${pw}</td></tr>`;
+  }
+  if (body._h !== h) { body.innerHTML = h; body._h = h; }
+  const since = wi[0].since;
+  setText($("wi-since"), since ? "since " + hms(since).slice(0, 5) : "");
+  setText($("wi-note"), `Main wallet's rules, filled after each delay · $${price(wi[0].starting, 0)} each · ctl = main's delay. `
+    + `Speed matters only if a faster row beats ctl with its range above 0.`);
+}
+
 function tagCounts() { return S.logCounts || {}; }  // all-time, from the bot's database
 function logLine(l) {
   const d = document.createElement("div"); d.className = "ln";
@@ -569,7 +619,7 @@ function frame(ts) {
     if (S.dirty.has("strip")) renderStrip();
     if (S.dirty.has("wallet") || S.dirty.has("trades")) renderWallet();
     if (S.dirty.has("logfull")) renderLog(true); else if (S.dirty.has("log")) renderLog(false);
-    if (S.dirty.has("footer")) renderFooter();
+    if (S.dirty.has("footer")) { renderFooter(); renderWhatIf(); }
   }
   S.dirty.clear();
   requestAnimationFrame(frame);

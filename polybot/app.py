@@ -83,6 +83,7 @@ class App:
         self.log_counts: dict[str, int] = {}
         self.candles = CandleBuilder()
         self.engine = None
+        self.whatif: list = []  # latency what-if wallets (PaperEngine), run mode only
         self.loop_lag_ms = 0.0
         self.loop_lag_max_ms = 0.0
         self.db: Database | None = None
@@ -149,6 +150,14 @@ class App:
 
             self.engine = PaperEngine(self)
             self.engine.reconcile_on_start()
+            if cfg.whatif.enabled:
+                now = time.time()
+                for ms in cfg.whatif.latencies_ms:
+                    name = f"whatif-{ms}ms"
+                    eng = PaperEngine(self, wallet=name, latency_ms=ms, starting_bankroll=cfg.whatif.starting_bankroll)
+                    eng.since = self.db.wallet_since(name, now)
+                    eng.reconcile_on_start()
+                    self.whatif.append(eng)
         self.dashboard = None
         if self.dashboard_enabled:
             from .dashboard.server import DashboardServer
@@ -198,8 +207,8 @@ class App:
             for t in tasks:
                 t.cancel()
             await asyncio.gather(*tasks, stop_task, return_exceptions=True)
-            if self.engine is not None:
-                await self.engine.shutdown()
+            for eng in self.engines:
+                await eng.shutdown()
 
     async def _bootstrap_history(self) -> None:
         """Seed vol and the candle chart from Coinbase 1-minute candles."""
@@ -242,13 +251,32 @@ class App:
         if echo:
             log.info("[%s] %s", tag, msg)
 
+    @property
+    def engines(self) -> list:
+        """Main paper wallet first, then the latency what-if wallets."""
+        return ([self.engine] if self.engine is not None else []) + self.whatif
+
+    def whatif_summary(self, now: float) -> list[dict[str, Any]]:
+        out = []
+        for eng in self.whatif:
+            st = eng.stats(now)
+            out.append({
+                "wallet": eng.wallet, "latency_ms": eng.latency_ms, "since": eng.since,
+                "starting": eng.starting, "trades": st["trades"], "settled": st["settled"], "wins": st["wins"],
+                "open": st["open_count"], "net_pnl": st["net_pnl"], "zero_fee_pnl": st["zero_fee_pnl"],
+                "fees": st["fees_all"], "windows": st["by_window"]["n"],
+                "window_mean": st["by_window"]["mean_pnl"], "window_ci95": st["by_window"]["ci95"],
+            })
+        return out
+
     # --- feed callbacks -------------------------------------------------------
     def _on_spot(self, tick: SpotTick) -> None:
         closed = self.candles.add(tick.exch_ts, tick.last)
         if closed is not None and self.db is not None:
             self.db.upsert_candle(closed[0], closed[1], closed[2], closed[3], closed[4], int(closed[5]), "ticks")
-        if self.engine is not None:
-            self.engine.evaluate(time.time())
+        now = time.time()
+        for eng in self.engines:
+            eng.evaluate(now)
 
     def _on_oracle(self, tick: OracleTick) -> None:
         last = self.coinbase.history.last()
@@ -308,8 +336,8 @@ class App:
             log.warning("RESOLVED %s: %s, but our Chainlink boundary prices predicted %s", slug, outcome, predicted)
             self.db.log_event("WARN", "oracle_mismatch", slug, {"resolved": outcome, "predicted": predicted})
         self.exec_log("SETTLE", f"{slug} resolved {outcome.upper()} (Gamma) · Chainlink predicted {(predicted or 'n/a').upper()}")
-        if self.engine is not None:
-            self.engine.settle(slug, outcome)
+        for eng in self.engines:
+            eng.settle(slug, outcome)
 
     # --- model ----------------------------------------------------------------
     def fair_value(self, w: MarketWindow, now: float) -> tuple[FairValue | None, str]:
@@ -373,6 +401,8 @@ class App:
         while not self.stop.is_set():
             await self.channel.maintain()
             now = time.time()
+            for eng in self.whatif:
+                eng.maintain(now)
             if self.engine is not None:
                 self.engine.maintain(now)
                 if now - last_flush >= 30.0:

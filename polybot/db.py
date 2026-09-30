@@ -86,18 +86,19 @@ TRADE_COLS = (
     "id", "signal_id", "slug", "series", "side", "token", "ts_signal", "ts_fill", "latency_ms",
     "shares", "shares_held", "avg_price", "signal_ask", "signal_vwap", "cost", "fee", "fee_in",
     "fair_signal", "fair_fill", "edge_entry", "levels", "status", "window_end", "outcome", "payout",
-    "pnl", "pnl_zero_fee", "settled_ts",
+    "pnl", "pnl_zero_fee", "settled_ts", "wallet",
 )
 SIGNAL_COLS = (
     "id", "ts", "slug", "series", "side", "token", "tau", "spot", "s0", "sigma_annual", "fair",
     "best_ask", "best_ask_size", "vwap", "fee_ps", "edge_gross", "edge_after_fee", "slippage",
-    "net_edge", "threshold", "shares", "usd", "decision", "reason", "trade_id",
+    "net_edge", "threshold", "shares", "usd", "decision", "reason", "trade_id", "wallet",
 )
 
 
 class Database:
     def __init__(self, path: str, read_only: bool = False) -> None:
         self.path = path
+        self.read_only = read_only
         if read_only:
             self.conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, isolation_level=None)
             return
@@ -108,6 +109,10 @@ class Database:
         self.conn.executescript(SCHEMA)
         # Databases created by earlier versions: add columns that didn't exist yet.
         self._ensure_columns("markets", {"ptb_polymarket": "REAL", "ptb_seen_at": "REAL"})
+        # Which paper wallet a row belongs to: NULL/'main' = the main wallet,
+        # 'whatif-<N>ms' = a latency what-if wallet.
+        self._ensure_columns("trades", {"wallet": "TEXT"})
+        self._ensure_columns("signals", {"wallet": "TEXT"})
         self.conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '2')")
 
     def _ensure_columns(self, table: str, cols: dict[str, str]) -> None:
@@ -229,13 +234,39 @@ class Database:
         sets = ",".join(f"{k}=?" for k in fields)
         self.conn.execute(f"UPDATE trades SET {sets} WHERE id=?", (*fields.values(), trade_id))
 
-    def all_trades(self) -> list[dict[str, Any]]:
-        cur = self.conn.execute(f"SELECT {','.join(TRADE_COLS)} FROM trades ORDER BY id")
-        return [dict(zip(TRADE_COLS, r)) for r in cur.fetchall()]
+    def _cols(self, table: str) -> set[str]:
+        return {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+
+    def all_trades(self, wallet: str = "main") -> list[dict[str, Any]]:
+        if "wallet" not in self._cols("trades"):  # read-only view of a database from before v0.4
+            cols = [c for c in TRADE_COLS if c != "wallet"]
+            rows = [dict(zip(cols, r)) for r in self.conn.execute(f"SELECT {','.join(cols)} FROM trades ORDER BY id")]
+            return [dict(r, wallet="main") for r in rows] if wallet == "main" else []
+        cur = self.conn.execute(
+            f"SELECT {','.join(TRADE_COLS)} FROM trades WHERE COALESCE(wallet, 'main') = ? ORDER BY id", (wallet,)
+        )
+        rows = [dict(zip(TRADE_COLS, r)) for r in cur.fetchall()]
+        for r in rows:
+            r["wallet"] = r["wallet"] or "main"
+        return rows
+
+    def wallets(self) -> list[str]:
+        if "wallet" not in self._cols("trades"):
+            return ["main"]
+        return [r[0] for r in self.conn.execute("SELECT DISTINCT COALESCE(wallet, 'main') FROM trades ORDER BY 1")]
+
+    def wallet_since(self, wallet: str, now: float | None = None) -> float | None:
+        """When a what-if wallet first ran (recorded once, on first start)."""
+        key = f"wallet_since:{wallet}"
+        if now is not None and not self.read_only:
+            self.conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES (?, ?)", (key, repr(now)))
+        row = self.conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return float(row[0]) if row else None
 
     def signals_between(self, t0: float, t1: float) -> list[dict[str, Any]]:
         cur = self.conn.execute(
-            f"SELECT {','.join(SIGNAL_COLS)} FROM signals WHERE ts >= ? AND ts < ? ORDER BY ts", (t0, t1)
+            f"SELECT {','.join(SIGNAL_COLS)} FROM signals WHERE ts >= ? AND ts < ? "
+            "AND COALESCE(wallet, 'main') = 'main' ORDER BY ts", (t0, t1)
         )
         return [dict(zip(SIGNAL_COLS, r)) for r in cur.fetchall()]
 

@@ -79,6 +79,7 @@ class Trade:
     pnl: float | None = None
     pnl_zero_fee: float | None = None
     settled_ts: float | None = None
+    wallet: str = "main"
 
     @property
     def cash_out(self) -> float:
@@ -88,6 +89,7 @@ class Trade:
     def from_row(cls, r: dict[str, Any]) -> "Trade":
         r = dict(r)
         r["levels"] = json.loads(r.get("levels") or "[]")
+        r["wallet"] = r.get("wallet") or "main"
         return cls(**r)
 
     def to_row(self) -> dict[str, Any]:
@@ -135,6 +137,19 @@ def walk_asks(
     return fills
 
 
+class _NullCounter(dict):
+    """Counter stand-in for what-if wallets: counting is the main wallet's job."""
+
+    def __missing__(self, key: Any) -> int:
+        return 0
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        pass
+
+
+_NULL_COUNTS = _NullCounter()
+
+
 @dataclass
 class _Pending:
     signal_id: int
@@ -144,11 +159,22 @@ class _Pending:
 
 
 class PaperEngine:
-    def __init__(self, app: "App") -> None:
+    """One paper wallet. The main wallet uses [sim] and reports to the
+    dashboard and execution log. What-if wallets ("whatif-<N>ms") apply the
+    same rules with a different order delay and their own bankroll; they are
+    quiet (their trades go to the database only) and don't count skips."""
+
+    def __init__(self, app: "App", wallet: str = "main", latency_ms: float | None = None,
+                 starting_bankroll: float | None = None) -> None:
         self.app = app
         self.cfg = app.cfg
         self.db = app.db
-        self.trades: list[Trade] = [Trade.from_row(r) for r in self.db.all_trades()]
+        self.wallet = wallet
+        self.main = wallet == "main"
+        self.latency_ms = self.cfg.sim.latency_ms if latency_ms is None else float(latency_ms)
+        self._starting = self.cfg.sim.starting_bankroll if starting_bankroll is None else starting_bankroll
+        self.since: float | None = None  # what-if wallets: when this wallet first ran
+        self.trades: list[Trade] = [Trade.from_row(r) for r in self.db.all_trades(wallet)]
         self.pending: dict[int, _Pending] = {}  # signal id -> reserved order in flight
         self._inflight: set[tuple[str, str]] = set()
         self._last_skip: dict[tuple[str, str], float] = {}
@@ -165,7 +191,7 @@ class PaperEngine:
     # --- accounting -------------------------------------------------------------------
     @property
     def starting(self) -> float:
-        return self.cfg.sim.starting_bankroll
+        return self._starting
 
     def realized_pnl(self) -> float:
         return sum(t.pnl or 0.0 for t in self.trades if t.status in ("WON", "LOST"))
@@ -208,6 +234,10 @@ class PaperEngine:
         self.pending.clear()
         self.flush_counts()
 
+    def _log(self, tag: str, msg: str, ref: str | None = None) -> None:
+        if self.main:
+            self.app.exec_log(tag, msg, ref=ref)
+
     def flush_counts(self) -> None:
         if self._counts:
             self.db.add_opportunity_counts(self._counts.items())
@@ -236,7 +266,7 @@ class PaperEngine:
         ask, ask_size = best
         fair = fv.p_up if side == "Up" else 1.0 - fv.p_up
         edge_gross = fair - ask
-        counts = self._counts
+        counts = self._counts if self.main else _NULL_COUNTS
         counts[(w.slug, side, "checked")] += 1
         if edge_gross <= 0:
             counts[(w.slug, side, "no_edge")] += 1
@@ -298,26 +328,26 @@ class PaperEngine:
 
         if reason is not None:
             counts[(w.slug, side, rkey)] += 1
-            if now - self._last_skip.get(key, 0.0) >= st.skip_log_interval_s:
+            if self.main and now - self._last_skip.get(key, 0.0) >= st.skip_log_interval_s:
                 self._last_skip[key] = now
                 record.update(decision="skipped", reason=reason)
                 sid = self.db.insert_signal(record)
                 self.skips_logged += 1
-                self.app.exec_log("SKIP", f"skip {label}: {reason}", ref=f"sig:{sid}")
+                self._log("SKIP", f"skip {label}: {reason}", ref=f"sig:{sid}")
                 self._publish_signal(sid, record)
             return
 
         # A real signal: reserve the cash and send the (paper) order.
         counts[(w.slug, side, "signal")] += 1
-        record.update(decision="pending", reason=None)
+        record.update(decision="pending", reason=None, wallet=self.wallet)
         sid = self.db.insert_signal(record)
         self.signals_taken += 1
         self.pending[sid] = _Pending(sid, w.slug, side, record["usd"])
         self._inflight.add(key)
-        self.app.exec_log(
+        self._log(
             "SIG",
             f"{label} {shares:g} sh @ ask {ask:.2f} · fair {fair:.3f} · edge {cents(edge_after_fee)} after fee"
-            f" · net {cents(net_edge)} > {cents(st.safety_buffer)} · sending ({sim.latency_ms:.0f}ms)",
+            f" · net {cents(net_edge)} > {cents(st.safety_buffer)} · sending ({self.latency_ms:.0f}ms)",
             ref=f"sig:{sid}",
         )
         self._publish_signal(sid, record)
@@ -338,23 +368,24 @@ class PaperEngine:
     async def _execute(self, sid: int, sig: dict[str, Any], w: "MarketWindow", fv: "FairValue") -> None:
         key = (w.slug, sig["side"])
         try:
-            await asyncio.sleep(self.cfg.sim.latency_ms / 1000.0)
+            await asyncio.sleep(self.latency_ms / 1000.0)
             self._fill(sid, sig, w)
         finally:
             self.pending.pop(sid, None)
             self._inflight.discard(key)
 
     def _skip_fill(self, sid: int, sig: dict[str, Any], reason: str) -> None:
-        self._counts[(sig["slug"], sig["side"], "fill_skipped")] += 1
+        if self.main:
+            self._counts[(sig["slug"], sig["side"], "fill_skipped")] += 1
         self.db.update_signal(sid, decision="skipped", reason=reason)
         sig.update(decision="skipped", reason=reason)
-        self.app.exec_log("SKIP", f"skip {sig['side'].upper()} {sig['series']}: {reason}", ref=f"sig:{sid}")
+        self._log("SKIP", f"skip {sig['side'].upper()} {sig['series']}: {reason}", ref=f"sig:{sid}")
         self._publish_signal(sid, sig)
 
     def _fill(self, sid: int, sig: dict[str, Any], w: "MarketWindow") -> None:
         sim = self.cfg.sim
         now = time.time()
-        lat = sim.latency_ms
+        lat = self.latency_ms
         if now >= w.end_ts:
             return self._skip_fill(sid, sig, "window closed during latency")
         book = self.app.channel.books.get(sig["token"])
@@ -393,18 +424,19 @@ class PaperEngine:
             shares=shares, shares_held=held, avg_price=avg, signal_ask=sig["best_ask"], signal_vwap=sig["vwap"],
             cost=cost, fee=fee, fee_in=self.cfg.fees.buy_fee_in, fair_signal=fair, fair_fill=fair_fill,
             edge_entry=fair - avg - fee / shares, levels=[list(x) for x in fills],
-            status="OPEN", window_end=w.end_ts,
+            status="OPEN", window_end=w.end_ts, wallet=self.wallet,
         )
         t.id = self.db.insert_trade(t.to_row())
         self.trades.append(t)
-        self._counts[(w.slug, sig["side"], "filled")] += 1
+        if self.main:
+            self._counts[(w.slug, sig["side"], "filled")] += 1
         self.db.update_signal(sid, decision="filled", reason=None, trade_id=t.id)
         sig.update(decision="filled", reason=None, trade_id=t.id)
         for p, s, _ in fills:
             self._hidden.setdefault(sig["token"], []).append((p, s, now))
         self._changed()
         moved = "" if abs(avg - sig["best_ask"]) < 1e-9 else f" (signal ask {sig['best_ask']:.2f})"
-        self.app.exec_log(
+        self._log(
             "FILL",
             f"#{t.id} {t.side.upper()} {shares:g} sh @ {avg:.3f}{moved} · fair {fair:.2f} · "
             f"edge {cents(t.edge_entry)} after fee · fee ${fee:.3f} · filled",
@@ -439,7 +471,7 @@ class PaperEngine:
                 pnl_zero_fee=t.pnl_zero_fee, settled_ts=now,
             )
             self._changed()
-            self.app.exec_log(
+            self._log(
                 "WIN" if won else "LOSS",
                 f"#{t.id} {t.side.upper()} {t.shares:g} sh @ {t.avg_price:.3f} → {outcome.upper()} · "
                 f"P&L {t.pnl:+.2f} (fee {t.fee:.3f}, zero-fee {t.pnl_zero_fee:+.2f})",
@@ -449,10 +481,14 @@ class PaperEngine:
 
     # --- output -----------------------------------------------------------------------------------
     def _publish_trade(self, t: Trade) -> None:
+        if not self.main:
+            return
         self.app.publish({"type": "trade", "trade": t.public()})
         self.app.publish({"type": "stats", "stats": self.stats(time.time())})
 
     def _publish_signal(self, sid: int, rec: dict[str, Any]) -> None:
+        if not self.main:
+            return
         d = {k: v for k, v in rec.items() if k != "token"}
         d["id"] = sid
         self.app.publish({"type": "signal", "signal": d})

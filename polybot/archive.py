@@ -54,7 +54,10 @@ starts. Open the .csv files in Excel or Google Sheets. Everything here is rebuil
 from data/paperbot.sqlite, so the archive can be deleted safely.
 To refresh it by hand:  python -m polybot archive
 
-all_trades.csv   every paper trade ever made (same columns as trades.csv)
+all_trades.csv   every paper trade ever made by the main wallet (same columns as trades.csv)
+whatif_trades.csv  trades of the latency what-if wallets ("whatif-0ms" etc.): the same
+                 rules as the main wallet, orders filled after a different delay, each
+                 with its own bankroll. Compare them with `python -m polybot report`.
 
 <day>/summary.txt
     The day in numbers. "BY ENTRY PRICE" compares how often trades at each
@@ -144,6 +147,14 @@ def _has_table(conn: sqlite3.Connection, name: str) -> bool:
     return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
 
 
+def _wallet_sql(conn: sqlite3.Connection, table: str, main: bool) -> str:
+    """SQL condition selecting the main wallet's rows (or the what-if wallets')."""
+    has = any(r[1] == "wallet" for r in conn.execute(f"PRAGMA table_info({table})"))
+    if not has:  # database from before v0.4: everything is the main wallet
+        return "1=1" if main else "0=1"
+    return "COALESCE(wallet, 'main') = 'main'" if main else "COALESCE(wallet, 'main') != 'main'"
+
+
 def _write_csv(path: Path, header: list[str], rows: list[list[Any]], result: ArchiveResult) -> None:
     """Write via a temp file so a half-written file never replaces a good one.
     utf-8-sig so Excel reads the symbols (¢, τ, ≤) correctly."""
@@ -210,7 +221,8 @@ def _money(x: float) -> str:
 
 
 def _summary(day: date, tzname: str, now: float, tz: ZoneInfo, trades: list[sqlite3.Row],
-             windows: list[sqlite3.Row], counts: dict[str, dict[str, int]], n_signals: int) -> str:
+             windows: list[sqlite3.Row], counts: dict[str, dict[str, int]], n_signals: int,
+             whatif: dict[str, list[sqlite3.Row]] | None = None) -> str:
     settled = [t for t in trades if t["status"] in ("WON", "LOST")]
     won = [t for t in settled if t["status"] == "WON"]
     net = sum(t["pnl"] or 0.0 for t in settled)
@@ -275,6 +287,18 @@ def _summary(day: date, tzname: str, now: float, tz: ZoneInfo, trades: list[sqli
         f"  start price missed {sum(1 for w in windows if w['s0_status'] == 'missed')}",
         "",
     ]
+    if whatif:
+        lines += [
+            "LATENCY WHAT-IF  (same rules as the main wallet, orders filled after each delay; trades entered this day)",
+            f"  {'delay':<10} {'trades':>6} {'won':>9} {'net P&L':>11} {'zero-fee':>11}",
+        ]
+        for name in sorted(whatif, key=lambda n: int("".join(c for c in n if c.isdigit()) or 0)):
+            ts_ = whatif[name]
+            st = [t for t in ts_ if t["status"] in ("WON", "LOST")]
+            won = sum(1 for t in st if t["status"] == "WON")
+            lines.append(f"  {name.removeprefix('whatif-'):<10} {len(ts_):>6} {f'{won}/{len(st)}':>9} "
+                         f"{_money(sum(t['pnl'] or 0.0 for t in st)):>11} {_money(sum(t['pnl_zero_fee'] or 0.0 for t in st)):>11}")
+        lines += ["  Details: whatif_trades.csv in the archive folder; the full comparison is in `python -m polybot report`.", ""]
     return "\n".join(lines)
 
 
@@ -286,15 +310,21 @@ def export_day(db_path: str, day: date, tzname: str, root: Path, now: float, res
     folder.mkdir(parents=True, exist_ok=True)
     conn = _connect(db_path)
     try:
-        trades = conn.execute("SELECT * FROM trades WHERE ts_signal >= ? AND ts_signal < ? ORDER BY id", (t0, t1)).fetchall()
-        signals = conn.execute("SELECT * FROM signals WHERE ts >= ? AND ts < ? ORDER BY ts", (t0, t1)).fetchall()
+        tmain, smain = _wallet_sql(conn, "trades", True), _wallet_sql(conn, "signals", True)
+        trades = conn.execute(f"SELECT * FROM trades WHERE ts_signal >= ? AND ts_signal < ? AND {tmain} ORDER BY id",
+                              (t0, t1)).fetchall()
+        signals = conn.execute(f"SELECT * FROM signals WHERE ts >= ? AND ts < ? AND {smain} ORDER BY ts", (t0, t1)).fetchall()
+        whatif: dict[str, list[sqlite3.Row]] = {}
+        for t in conn.execute(f"SELECT * FROM trades WHERE ts_signal >= ? AND ts_signal < ? AND "
+                              f"{_wallet_sql(conn, 'trades', False)} ORDER BY id", (t0, t1)):
+            whatif.setdefault(t["wallet"], []).append(t)
         windows = conn.execute("SELECT * FROM markets WHERE start_ts >= ? AND start_ts < ? ORDER BY start_ts, series", (t0, t1)).fetchall()
         log = conn.execute("SELECT ts, tag, msg, ref FROM exec_log WHERE ts >= ? AND ts < ? ORDER BY ts, id", (t0, t1)).fetchall()
         slugs = [w["slug"] for w in windows]
         counts = _counts_by_slug(conn, slugs)
         by_slug: dict[str, list[sqlite3.Row]] = {}
         if slugs:
-            q = f"SELECT * FROM trades WHERE slug IN ({','.join('?' for _ in slugs)})"
+            q = f"SELECT * FROM trades WHERE slug IN ({','.join('?' for _ in slugs)}) AND {tmain}"
             for t in conn.execute(q, slugs):
                 by_slug.setdefault(t["slug"], []).append(t)
     finally:
@@ -340,7 +370,7 @@ def export_day(db_path: str, day: date, tzname: str, root: Path, now: float, res
     ], win_rows, result)
     _write_csv(folder / "log.csv", ["time", "tag", "message", "ref"],
                [[_fmt_time(r["ts"], tz), r["tag"], r["msg"], r["ref"] or ""] for r in log], result)
-    _write_text(folder / "summary.txt", _summary(day, tzname, now, tz, trades, windows, counts, len(signals)), result)
+    _write_text(folder / "summary.txt", _summary(day, tzname, now, tz, trades, windows, counts, len(signals), whatif), result)
     result.days.append(day.isoformat())
     return result
 
@@ -385,8 +415,12 @@ def run_archive(db_path: str, root: str | Path, tzname: str, now: float, interva
         export_day(db_path, d, tzname, root, now, result)
     conn = _connect(db_path)
     try:
-        all_trades = conn.execute("SELECT * FROM trades ORDER BY id").fetchall()
+        all_trades = conn.execute(f"SELECT * FROM trades WHERE {_wallet_sql(conn, 'trades', True)} ORDER BY id").fetchall()
+        whatif = conn.execute(f"SELECT * FROM trades WHERE {_wallet_sql(conn, 'trades', False)} ORDER BY wallet, id").fetchall()
     finally:
         conn.close()
     _write_csv(root / "all_trades.csv", TRADE_HEADER, _trade_rows(all_trades, tz), result)
+    if whatif:
+        _write_csv(root / "whatif_trades.csv", ["wallet", *TRADE_HEADER],
+                   [[t["wallet"], *row] for t, row in zip(whatif, _trade_rows(whatif, tz))], result)
     return result

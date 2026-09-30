@@ -385,3 +385,38 @@ def test_boundary_miss_detail_names_nearest_reports():
     feed2 = ChainlinkFeed(None, "ws://x", ChainlinkConfig(), history_s=3600)  # type: ignore[arg-type]
     feed2.history.append(t0 + 5, 1.0)
     assert "joined late" in SeriesTracker._miss_detail(SimpleNamespace(chainlink=feed2, cfg=fake.cfg), t0)
+
+
+def test_old_trades_table_reads_as_main_wallet(tmp_path):
+    import sqlite3
+
+    from polybot.db import TRADE_COLS, Database
+
+    path = tmp_path / "old.sqlite"
+    old = sqlite3.connect(path)
+    cols = [c for c in TRADE_COLS if c != "wallet"]
+    old.execute(f"CREATE TABLE trades ({', '.join(cols)})")
+    old.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+    old.execute("INSERT INTO trades(id, slug, status) VALUES (1, 'a', 'WON')")
+    old.commit()
+    old.close()
+    ro = Database(str(path), read_only=True)  # e.g. `report` before the new version first ran
+    assert [r["id"] for r in ro.all_trades()] == [1] and ro.all_trades("whatif-0ms") == []
+    assert ro.wallets() == ["main"] and ro.wallet_since("whatif-0ms") is None
+    ro.close()
+    db = Database(str(path))  # the bot migrates it
+    db.conn.execute("INSERT INTO trades(id, slug, status, wallet) VALUES (2, 'a', 'WON', 'whatif-0ms')")
+    assert [r["id"] for r in db.all_trades()] == [1]
+    assert [r["id"] for r in db.all_trades("whatif-0ms")] == [2]
+    assert db.wallet_since("whatif-0ms", 123.0) == 123.0 and db.wallet_since("whatif-0ms", 999.0) == 123.0
+
+
+def test_by_window_groups_trades_of_the_same_market():
+    from polybot.metrics import by_window, mean_ci
+
+    trades = [{"slug": "a", "pnl": 5.0}, {"slug": "a", "pnl": 5.0}, {"slug": "b", "pnl": -2.0}, {"slug": "c", "pnl": 1.0}]
+    bw = by_window(trades)
+    assert bw["n"] == 3 and bw["mean_pnl"] == pytest.approx(3.0)
+    m, ci = mean_ci([10.0, -2.0, 1.0])
+    assert ci is not None and ci[0] < m < ci[1] and bw["ci95"] == pytest.approx(ci)
+    assert mean_ci([]) == (None, None) and mean_ci([1.0]) == (1.0, None)

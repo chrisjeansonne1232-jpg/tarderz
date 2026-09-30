@@ -176,6 +176,7 @@ class LiveSource:
             "db_bytes": self._db_size[1],
             "uptime_s": now - app.started_at,
             "engine": {"in_flight": len(eng.pending), "cash": eng.cash()} if eng else None,
+            "whatif": app.whatif_summary(now),
         }
 
     def snapshot(self) -> dict[str, Any]:

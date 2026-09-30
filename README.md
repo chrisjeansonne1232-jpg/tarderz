@@ -316,6 +316,32 @@ Everything goes to SQLite (`data/paperbot.sqlite`) and a rotating log
 sqlite3 data/paperbot.sqlite "SELECT slug, s0_chainlink, end_chainlink, chainlink_predicted, resolved_outcome FROM markets ORDER BY start_ts DESC LIMIT 20"
 ```
 
+## Latency what-if
+
+"Would a faster connection make this profitable?" The bot runs extra paper
+wallets next to the main one (`[whatif]` in `config.toml`, default 0, 50 and
+300 ms). Each applies exactly the main wallet's rules at the same moments,
+but its orders fill after its own delay, against the book as it is then. Each
+has its own bankroll ($1,000 by default, so running out of cash never cuts a
+comparison short) and the same per-trade and per-window caps. The 300 ms
+wallet is the control: the main wallet's delay, started at the same time as
+the others.
+
+The dashboard's Analytics panel shows them side by side, and `report` adds a
+LATENCY WHAT-IF table over the period all of them have been running. Judge
+them by net P&L per market window and its 95% range (trades in the same
+window win or lose together, so windows are the independent samples):
+
+- a faster wallet only shows that speed helps if it beats the control
+  clearly **and** its range stays above zero;
+- if even the 0 ms wallet loses after fees, lower latency alone won't fix it.
+
+Limits: the delay only applies to orders. The prices the bot sees still
+arrive over your own connection, so a server next to the exchanges would
+also see data sooner. And 0 ms is not attainable; it's the best case.
+What-if trades are stored with a `wallet` column and archived to
+`whatif_trades.csv`; they never touch the main wallet's numbers.
+
 ## Archive
 
 While it runs, the bot writes a folder per day (in `dashboard.timezone`) to
