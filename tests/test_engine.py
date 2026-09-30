@@ -132,6 +132,8 @@ def test_adverse_move_skip_policy(tmp_path):
     assert eng.trades == []
     assert app.log[-1][0] == "SKIP" and "moved 0.52→0.53" in app.log[-1][1]
     assert eng.cash() == pytest.approx(app.cfg.sim.starting_bankroll)  # reservation released
+    # sent but not filled: recorded as "missed", distinct from opportunities never sent
+    assert app.db.conn.execute("SELECT decision FROM signals ORDER BY id DESC").fetchone()[0] == "missed"
 
 
 def test_skip_reasons_and_throttle(tmp_path):

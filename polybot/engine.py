@@ -112,6 +112,12 @@ class Trade:
         return {"status": self.status, "outcome": self.outcome, "payout": self.payout, "pnl": self.pnl,
                 "pnl_zero_fee": self.pnl_zero_fee, "settled_ts": self.settled_ts}
 
+    def stat(self) -> list[Any]:
+        """Compact form for the dashboard's streak bars and histograms:
+        [id, ts_fill, edge_entry, pnl, pnl_zero_fee, slippage, latency_ms, status, fee, settled_ts]."""
+        return [self.id, self.ts_fill, self.edge_entry, self.pnl, self.pnl_zero_fee, self.avg_price - self.signal_ask,
+                self.latency_ms, self.status, self.fee, self.settled_ts]
+
     def public(self) -> dict[str, Any]:
         d = asdict(self)
         d.pop("token", None)
@@ -261,7 +267,7 @@ class PaperEngine:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
         for sid in list(self.pending):
-            self.db.update_signal(sid, decision="skipped", reason="shutdown before fill")
+            self.db.update_signal(sid, decision="missed", reason="shutdown before fill")
         self.pending.clear()
         self.flush_counts()
 
@@ -408,8 +414,9 @@ class PaperEngine:
     def _skip_fill(self, sid: int, sig: dict[str, Any], reason: str) -> None:
         if self.main:
             self._counts[(sig["slug"], sig["side"], "fill_skipped")] += 1
-        self.db.update_signal(sid, decision="skipped", reason=reason)
-        sig.update(decision="skipped", reason=reason)
+        # "missed": the order was sent but the book changed during the latency
+        self.db.update_signal(sid, decision="missed", reason=reason)
+        sig.update(decision="missed", reason=reason)
         self._log("SKIP", f"skip {sig['side'].upper()} {sig['series']}: {reason}", ref=f"sig:{sid}")
         self._publish_signal(sid, sig)
 
@@ -505,7 +512,7 @@ class PaperEngine:
     def _publish_trade(self, t: Trade) -> None:
         if not self.main:
             return
-        self.app.publish({"type": "trade", "trade": t.public()})
+        self.app.publish({"type": "trade", "trade": t.public(), "stat": t.stat()})
         self.app.publish({"type": "stats", "stats": self.stats(time.time())})
 
     def _publish_signal(self, sid: int, rec: dict[str, Any]) -> None:

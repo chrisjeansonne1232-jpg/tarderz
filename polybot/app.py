@@ -349,6 +349,7 @@ class App:
             log.warning("RESOLVED %s: %s, but our Chainlink boundary prices predicted %s", slug, outcome, predicted)
             self.db.log_event("WARN", "oracle_mismatch", slug, {"resolved": outcome, "predicted": predicted})
         self.exec_log("SETTLE", f"{slug} resolved {outcome.upper()} (Gamma) · Chainlink predicted {(predicted or 'n/a').upper()}")
+        self.publish({"type": "window", "slug": slug, "outcome": outcome})
         for eng in self.engines:
             eng.settle(slug, outcome)
         if self.engine is not None:

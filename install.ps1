@@ -36,7 +36,7 @@
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
         # config.toml: replace it if it is an unmodified copy of an earlier release,
         # keep it (and save the new defaults next to it) if you've edited it.
-        $shipped = @("2536e702e6aa5518fe4ee785793415a92f340ea19eba59f36ac53a2f110715ca", "423bddbe5dc5c398757ac3685e71b570387f52a1b59914445f767ea52b757d96", "28f8344f62acc3f04ab7c5e215df3427eb903fe880c5f93373f77fac3a659e74", "071340332ce3dd87563729c54784a1176743c9cc367fa17d75c36e55363fe788", "78ed7a464ce53ee4f5a82e73fb2d04780570d51f9c705ccf14fd395e781069a8", "70711e73c3c3c219f07423a5bd0a0d6221422d06cc9b43daacb9bb83c93156d6", "c75d98666829b6b35d7aa7ca70a84c00e0d010939f3c42c82b954e515a7fc078")
+        $shipped = @("2536e702e6aa5518fe4ee785793415a92f340ea19eba59f36ac53a2f110715ca", "423bddbe5dc5c398757ac3685e71b570387f52a1b59914445f767ea52b757d96", "28f8344f62acc3f04ab7c5e215df3427eb903fe880c5f93373f77fac3a659e74", "071340332ce3dd87563729c54784a1176743c9cc367fa17d75c36e55363fe788", "78ed7a464ce53ee4f5a82e73fb2d04780570d51f9c705ccf14fd395e781069a8", "70711e73c3c3c219f07423a5bd0a0d6221422d06cc9b43daacb9bb83c93156d6", "c75d98666829b6b35d7aa7ca70a84c00e0d010939f3c42c82b954e515a7fc078", "c6dab9cf9ac51dfab969397b4e8a2bf8e12365b2bcd8269c49848e19c17e0fcf")
         $stampFile = Join-Path $dir ".config.shipped.sha256"
         if (Test-Path -LiteralPath $stampFile) { $shipped += (Get-Content -LiteralPath $stampFile -Raw).Trim().ToLower() }
         $newCfg = Join-Path $src.FullName "config.toml"

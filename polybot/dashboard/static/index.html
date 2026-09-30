@@ -19,6 +19,7 @@
   --green: #1db877; --red: #d6334f; --amber: #d98e14; --grey: #6b6478;
   --green-t: #2fd08c; --red-t: #f05a72; --amber-t: #e9a23b;
   --violet: #b394ff; --blue: #8fa3ff; --teal: #58c4d6;
+  --series2: #8f6cf0;  /* second categorical mark next to --mag (validated: CVD ΔE 14, dark surface) */
   --fs: 11px; --fs-s: 9.5px; --gap: 6px;
 }
 * { box-sizing: border-box; }
@@ -81,6 +82,7 @@ body {
 .panel { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 3px; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .panel.feat { border-color: rgba(255, 46, 151, .85); box-shadow: 0 0 0 1px rgba(255, 46, 151, .12), 0 0 22px -8px var(--mag-glow); }
 .ph { display: flex; align-items: center; gap: 8px; padding: 6px 9px 3px; font-size: var(--fs-s); color: var(--dim); letter-spacing: .1em; text-transform: uppercase; flex: none; min-width: 0; }
+.ph { white-space: nowrap; }
 .ph .r { margin-left: auto; display: flex; gap: 8px; align-items: center; text-transform: none; letter-spacing: 0; white-space: nowrap; }
 .pb { flex: 1; min-height: 0; padding: 3px 9px 8px; position: relative; }
 .empty { color: var(--dimmer); font-size: var(--fs-s); letter-spacing: .06em; padding: 6px 0; }
@@ -122,6 +124,64 @@ body {
 #wi-tbl tr.ctl td:first-child { color: var(--dim); }
 .wi-note { font-size: 9px; color: var(--dim); line-height: 1.45; }
 
+/* ---------- shared chart bits ---------- */
+.pb.fill { padding: 2px 6px 6px; display: flex; flex-direction: column; }
+.plot { position: relative; flex: 1; min-height: 0; }
+.plot > canvas, .plot > .lw { position: absolute; inset: 0; width: 100%; height: 100%; }
+.plot > canvas.ov { pointer-events: none; z-index: 3; }
+.legend { display: flex; gap: 10px; font-size: 9px; color: var(--dim); text-transform: none; letter-spacing: 0; white-space: nowrap; }
+.legend i { display: inline-block; vertical-align: middle; margin-right: 4px; }
+.legend i.ln { width: 12px; height: 2px; background: currentColor; }
+.legend i.dash { width: 12px; height: 0; border-top: 2px dashed currentColor; }
+.legend i.dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.legend i.hol { width: 7px; height: 7px; border: 1.5px solid currentColor; }
+.legend i.blk { width: 8px; height: 8px; background: currentColor; opacity: .5; }
+.k-mag { color: var(--mag); } .k-s2 { color: var(--series2); } .k-grey { color: var(--grey); } .k-red { color: var(--red); } .k-green { color: var(--green); }
+.pempty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--dimmer); font-size: var(--fs-s); letter-spacing: .06em; text-align: center; padding: 0 12px; z-index: 4; pointer-events: none; }
+#tip { position: fixed; z-index: 20; pointer-events: none; background: #1d1729; border: 1px solid var(--line2); color: var(--text); font-size: 10px; line-height: 1.45; padding: 4px 7px; border-radius: 2px; white-space: pre; box-shadow: 0 4px 14px rgba(0, 0, 0, .5); }
+
+/* ---------- order book ---------- */
+.ladders { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; height: 100%; min-height: 0; }
+.lad { display: flex; flex-direction: column; min-width: 0; font-size: 10px; line-height: 12.5px; }
+.lad .lh { display: flex; justify-content: space-between; color: var(--dim); font-size: 9px; letter-spacing: .08em; padding-bottom: 2px; border-bottom: 1px solid var(--line); margin-bottom: 1px; }
+.lad .lh b { color: var(--text); font-weight: 500; letter-spacing: 0; }
+.lr { position: relative; display: flex; justify-content: space-between; padding: 0 3px; }
+.lr .bar { position: absolute; top: 1px; bottom: 1px; right: 0; opacity: .22; }
+.lr.ask .bar { background: var(--red); } .lr.bid .bar { background: var(--green); }
+.lr.ask .p { color: var(--red-t); } .lr.bid .p { color: var(--green-t); }
+.lr .s { color: var(--dim); position: relative; } .lr .p { position: relative; }
+.lr.best .p { font-weight: 700; }
+.lr.fair { color: var(--mag); font-size: 9px; justify-content: center; border-top: 1px dashed var(--mag); border-bottom: 1px dashed var(--mag); margin: 1px 0; line-height: 11px; }
+.lr.spr { color: var(--dimmer); font-size: 9px; justify-content: center; }
+.lad .lf { margin-top: auto; font-size: 9px; color: var(--dim); padding-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- streak ---------- */
+.streak .pb { display: flex; flex-direction: column; gap: 4px; }
+.stk-big { display: flex; align-items: baseline; gap: 8px; }
+.stk-big .v { font-size: 26px; font-weight: 700; line-height: 1.15; }
+.stk-big .sub { font-size: 9px; color: var(--dim); }
+.stk-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px; font-size: 10px; }
+.stk-grid label { display: block; font-size: 8.5px; color: var(--dim); letter-spacing: .1em; text-transform: uppercase; }
+.streak .plot { min-height: 40px; }
+
+/* ---------- recent trades ---------- */
+.tw { position: absolute; inset: 0 6px 6px; overflow-y: auto; overscroll-behavior: contain; }
+.tw::-webkit-scrollbar { width: 6px; } .tw::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 3px; }
+#tr-tbl { width: 100%; border-collapse: collapse; font-size: 10px; }
+#tr-tbl th { position: sticky; top: 0; background: var(--panel); font-size: 8.5px; color: var(--dim); font-weight: 400; letter-spacing: .08em; text-transform: uppercase; text-align: right; padding: 0 0 3px 6px; white-space: nowrap; z-index: 1; }
+#tr-tbl td { text-align: right; padding: 1px 0 1px 6px; white-space: nowrap; border-top: 1px solid rgba(36, 30, 49, .6); }
+#tr-tbl th:nth-child(-n+3), #tr-tbl td:nth-child(-n+3) { text-align: left; }
+#tr-tbl td.mut { color: var(--dim); }
+.st { font-size: 8.5px; font-weight: 700; letter-spacing: .06em; padding: 0 4px; border: 1px solid currentColor; border-radius: 2px; }
+.st.WON { color: var(--green-t); } .st.LOST { color: var(--red-t); } .st.OPEN { color: var(--dim); } .st.PENDING { color: var(--amber-t); }
+
+/* ---------- analytics tabs ---------- */
+.tabs2 { display: flex; gap: 2px; }
+.tabs2 button { font: inherit; font-size: 8.5px; letter-spacing: .08em; color: var(--dim); background: none; border: 1px solid transparent; border-radius: 2px; padding: 0 4px; cursor: pointer; text-transform: uppercase; }
+.tabs2 button.on { color: var(--text); border-color: var(--line2); background: rgba(255, 255, 255, .04); }
+.an-stats { font-size: 9px; color: var(--dim); line-height: 1.45; flex: none; padding-top: 2px; }
+.an-stats b { color: var(--text); font-weight: 500; }
+
 /* ---------- execution log ---------- */
 .log .pb { padding: 0; display: flex; }
 #log { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 2px 9px 6px; font-size: 10.5px; line-height: 1.5; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
@@ -142,6 +202,8 @@ body {
 /* ---------- footer ---------- */
 #ftr { display: flex; align-items: center; gap: 18px; padding: 0 12px; border-top: 1px solid var(--line); font-size: var(--fs-s); color: var(--dim); white-space: nowrap; overflow: hidden; }
 #ftr b { color: var(--text); font-weight: 400; }
+#ftr .credit { margin-left: auto; color: var(--dimmer); text-decoration: none; }
+#ftr .credit:hover { color: var(--dim); }
 
 @media (max-width: 1479px) { .brand .ver { display: none; } }  /* the footer always shows the version */
 
@@ -149,6 +211,7 @@ body {
 @media (max-width: 1320px) {
   :root { --fs: 10.5px; --fs-s: 9px; --gap: 5px; }
   #hdr { gap: 10px; padding: 0 9px; }
+  .legend .opt { display: none; }
   .row1 { grid-template-columns: 212px minmax(0, 1fr) 258px 204px; }
   .wallet .bal { font-size: 26px; }
   .feeds { gap: 9px; }
@@ -225,36 +288,56 @@ body {
         </div>
       </section>
       <section class="panel" id="p-chart" data-feeds="coinbase">
-        <div class="ph">BTC-USD · 1m · Coinbase<span class="stale-tag">STALE</span></div>
-        <div class="pb"><div class="empty">candles + S0 line + window boundaries — dashboard stage 2</div></div>
+        <div class="ph">BTC-USD · 1m · Coinbase
+          <span class="r legend"><span><i class="dash k-mag"></i>S0 now</span><span><i class="ln k-green"></i><i class="ln k-red" style="margin-left:-2px"></i>past S0 · Up/Down won</span><span class="k-grey opt">┆ windows</span><span class="opt">▲▼ our fills</span></span>
+          <span class="stale-tag">STALE</span></div>
+        <div class="pb fill"><div class="plot" id="c-btc-wrap"><div class="lw" id="c-btc"></div><canvas class="ov" id="c-btc-ov"></canvas><div class="pempty" id="c-btc-empty">waiting for candles</div></div></div>
       </section>
       <section class="panel" id="p-book" data-feeds="clob">
-        <div class="ph">Order book<span class="stale-tag">STALE</span></div>
-        <div class="pb"><div class="empty">top 5 ladder with fair-value marker — dashboard stage 2</div></div>
+        <div class="ph">Order book<span class="r mut num" id="bk-mkt"></span><span class="stale-tag">STALE</span></div>
+        <div class="pb"><div class="ladders"><div class="lad" id="lad-up"></div><div class="lad" id="lad-dn"></div></div></div>
       </section>
-      <section class="panel feat" id="p-streak" data-feeds="">
-        <div class="ph">Streak<span class="stale-tag">STALE</span></div>
-        <div class="pb"><div class="empty">streak, per-trade P&amp;L bars, best/worst, fees — dashboard stage 3</div></div>
+      <section class="panel feat streak" id="p-streak" data-feeds="">
+        <div class="ph">Streak<span class="r mut" id="stk-n"></span><span class="stale-tag">STALE</span></div>
+        <div class="pb">
+          <div class="stk-big"><span class="v num" id="stk-v">—</span><span class="sub" id="stk-sub"></span></div>
+          <div class="stk-grid">
+            <div><label>Best</label><span class="num" id="stk-best">—</span></div>
+            <div><label>Worst</label><span class="num" id="stk-worst">—</span></div>
+            <div><label>Fees paid</label><span class="num" id="stk-fees">—</span></div>
+            <div><label>Fee / trade</label><span class="num" id="stk-fpt">—</span></div>
+          </div>
+          <div class="legend"><span>last 40 settled trades · net P&amp;L</span></div>
+          <div class="plot"><canvas id="c-stk"></canvas><div class="pempty hidden" id="c-stk-empty">no settled trades yet</div></div>
+        </div>
       </section>
     </div>
 
-    <section class="panel" id="p-map" data-feeds="">
-      <div class="ph">Signal map · edge after fees vs time<span class="stale-tag">STALE</span></div>
-      <div class="pb"><div class="empty">every evaluated opportunity as a dot — dashboard stage 3</div></div>
+    <section class="panel" id="p-map" data-feeds="coinbase,clob">
+      <div class="ph">Signal map · net edge after fee &amp; slippage vs time
+        <span class="r legend"><span>▲ Up ▼ Down</span><span><i class="dot k-mag"></i>filled</span><span><i class="hol k-s2"></i>missed at fill</span><span><i class="dot k-grey"></i>skipped (sampled ≤1/5 s per side)</span><span class="k-mag">- - buffer</span></span>
+        <span class="stale-tag">STALE</span></div>
+      <div class="pb fill"><div class="plot"><canvas id="c-map"></canvas><div class="pempty hidden" id="c-map-empty">no opportunities in the last 30 min</div></div></div>
     </section>
 
     <div class="row row3">
       <section class="panel" id="p-equity" data-feeds="">
-        <div class="ph">Equity · net vs zero-fee<span class="stale-tag">STALE</span></div>
-        <div class="pb"><div class="empty">cumulative P&amp;L and drawdown — dashboard stage 3</div></div>
+        <div class="ph">Equity · net vs zero-fee
+          <span class="r legend"><span><i class="ln k-mag"></i>net</span><span><i class="dash k-s2"></i>zero-fee</span><span><i class="blk k-red"></i>drawdown</span></span>
+          <span class="stale-tag">STALE</span></div>
+        <div class="pb fill"><div class="plot"><div class="lw" id="c-eq"></div><div class="pempty" id="c-eq-empty">no settled trades yet</div></div></div>
       </section>
       <section class="panel" id="p-trades" data-feeds="">
-        <div class="ph">Recent trades<span class="stale-tag">STALE</span></div>
-        <div class="pb"><div class="empty">trade table — dashboard stage 3</div></div>
+        <div class="ph">Recent trades<span class="r mut" id="tr-n"></span><span class="stale-tag">STALE</span></div>
+        <div class="pb"><div class="tw"><table id="tr-tbl">
+          <thead><tr><th>time</th><th>mkt</th><th>side</th><th>shares @ price</th><th title="model probability at the signal">fair</th><th title="expected edge per share after fee">edge</th><th>fee</th><th>status</th><th title="net P&amp;L after fees">P&amp;L</th></tr></thead>
+          <tbody id="tr-body"></tbody></table><div class="pempty hidden" id="tr-empty">no trades yet in this run</div></div></div>
       </section>
       <section class="panel" id="p-analytics" data-feeds="">
-        <div class="ph">Analytics · latency what-if<span class="r mut num" id="wi-since"></span><span class="stale-tag">STALE</span></div>
-        <div class="pb wi">
+        <div class="ph">Analytics<span class="r tabs2" id="an-tabs"><button data-t="whatif" class="on">what-if</button><button data-t="edge">edge</button><button data-t="pnl">P&amp;L</button><button data-t="slip">slip</button><button data-t="lat">latency</button></span><span class="stale-tag">STALE</span></div>
+        <div class="pb fill hidden" id="an-hist"><div class="plot"><canvas id="c-hist"></canvas><div class="pempty hidden" id="c-hist-empty">no trades yet</div></div><div class="an-stats" id="an-stats"></div></div>
+        <div class="pb wi" id="an-wi">
+          <div class="legend"><span>latency what-if</span><span class="num" id="wi-since"></span></div>
           <table id="wi-tbl">
             <thead><tr><th>delay</th><th>trades</th><th>win</th><th>net P&amp;L</th><th title="same trades, no fees">0-fee</th><th title="average net P&amp;L per market window, ± its 95% range">$/window ±95%</th></tr></thead>
             <tbody id="wi-body"></tbody>
@@ -278,10 +361,13 @@ body {
     <span id="f-ver" class="num"></span>
     <span id="f-conn">connecting…</span>
     <span id="f-rest" data-feeds=""></span>
+    <a class="credit" href="https://www.tradingview.com/" target="_blank" rel="noopener" title="Charting library: TradingView Lightweight Charts (Apache-2.0)">charts by TradingView</a>
   </footer>
 </div>
+<div id="tip" class="hidden"></div>
 <div id="disc" class="hidden">DISCONNECTED FROM BOT · RECONNECTING…</div>
 
+<script src="/static/vendor/lightweight-charts/lightweight-charts.standalone.production.js"></script>
 <script>
 "use strict";
 // Everything rendered here comes from the bot over /ws. No sample data, no timers that invent values.
@@ -298,7 +384,9 @@ const S = {
   connected: false, tickT: 0, tickRecv: 0,
   series: null, logFilter: null, logHover: false, logTouchUntil: 0,
   dirty: new Set(), pendingLog: [], logCounts: {},
+  tradeStats: new Map(), winRecent: new Map(), panelsReady: false,
 };
+const ALL_PANELS = ["chart", "chartmk", "chartov", "book", "map", "equity", "trades", "streak", "hist"];
 
 // ---------- time ----------
 function rate() { return S.meta && S.meta.speed ? (S.meta.paused ? 0 : S.meta.speed) : 1; }
@@ -380,9 +468,13 @@ function onMsg(m) {
       S.signals = new Map((m.signals || []).map((s) => [s.id, s]));
       if (!S.series || !S.meta.series.some((x) => x.name === S.series)) S.series = S.meta.primary_series;
       S.connected = true;
+      S.tradeStats = new Map((m.trade_stats || []).map((r) => [r[0], r]));
+      S.winRecent = new Map((m.windows_recent || []).map((w) => [w.slug, w]));
+      if (!S.panelsReady) { initPanels(); S.panelsReady = true; }
+      setBtcData();
       applyTick(m.tick);
       buildStatic();
-      ["header", "strip", "wallet", "logfull"].forEach((k) => S.dirty.add(k));
+      ["header", "strip", "wallet", "logfull", ...ALL_PANELS].forEach((k) => S.dirty.add(k));
       break;
     case "tick": applyTick(m); break;
     case "log":
@@ -390,9 +482,14 @@ function onMsg(m) {
       S.log.push(m.line); if (S.log.length > 2000) S.log.splice(0, S.log.length - 2000);
       S.pendingLog.push(m.line); S.dirty.add("log");
       break;
-    case "trade": S.trades.set(m.trade.id, m.trade); S.dirty.add("trades"); break;
-    case "signal": S.signals.set(m.signal.id, m.signal); S.dirty.add("signals"); break;
-    case "stats": S.stats = m.stats; S.dirty.add("wallet"); S.dirty.add("header"); break;
+    case "trade":
+      S.trades.set(m.trade.id, m.trade);
+      if (m.stat) S.tradeStats.set(m.stat[0], m.stat);
+      ["trades", "streak", "hist", "chartmk"].forEach((k) => S.dirty.add(k));
+      break;
+    case "signal": S.signals.set(m.signal.id, m.signal); S.dirty.add("map"); break;
+    case "stats": S.stats = m.stats; ["wallet", "header", "equity", "streak", "hist"].forEach((k) => S.dirty.add(k)); break;
+    case "window": { const w = S.winRecent.get(m.slug); if (w) { w.outcome = m.outcome; S.dirty.add("chartov"); } break; }
     case "replay": if (S.meta) { Object.assign(S.meta, m.meta); S.dirty.add("header"); } break;
   }
 }
@@ -400,6 +497,15 @@ function applyTick(t) {
   if (!t) return;
   S.tick = t; S.tickT = t.t; S.tickRecv = performance.now() / 1000;
   S.dirty.add("header"); S.dirty.add("strip"); S.dirty.add("footer");
+  if (S.panelsReady) {
+    updateBtcCandle(t.candle);
+    for (const w of Object.values(t.windows || {})) {
+      if (!w) continue;
+      const old = S.winRecent.get(w.slug);
+      S.winRecent.set(w.slug, { slug: w.slug, series: w.series, start: w.start, end: w.end, s0: w.s0, outcome: old ? old.outcome : null });
+    }
+    ["chart", "chartov", "book"].forEach((k) => S.dirty.add(k));
+  }
 }
 
 // ---------- static bits built once per snapshot ----------
@@ -620,9 +726,433 @@ function frame(ts) {
     if (S.dirty.has("wallet") || S.dirty.has("trades")) renderWallet();
     if (S.dirty.has("logfull")) renderLog(true); else if (S.dirty.has("log")) renderLog(false);
     if (S.dirty.has("footer")) { renderFooter(); renderWhatIf(); }
+    if (S.panelsReady) {
+      if (S.dirty.has("chart")) renderBtc();
+      if (S.dirty.has("chartmk")) renderBtcMarkers();
+      if (S.dirty.has("chartov") || S.dirty.has("chart")) drawBtcOverlay();
+      if (S.dirty.has("book")) renderBook();
+      if (S.dirty.has("trades")) renderTrades();
+      if (S.dirty.has("streak")) renderStreak();
+      if (S.dirty.has("equity")) renderEquity();
+      if (HIST.tab !== "whatif" && S.dirty.has("hist")) drawHist();
+      if (S.dirty.has("map") || ts - MAP.last > 1000) { MAP.last = ts; drawMap(); }
+    }
   }
   S.dirty.clear();
   requestAnimationFrame(frame);
+}
+
+// =====================================================================
+// Stage 2-4 panels: BTC chart, order book, streak, signal map, equity,
+// recent trades, analytics histograms. Display only; every number comes
+// from the bot (snapshot + live events). Nothing is sent back.
+// =====================================================================
+const COL = {};
+function readColors() {
+  const cs = getComputedStyle(document.documentElement);
+  for (const k of ["mag", "series2", "green", "red", "grey", "text", "dim", "dimmer", "line", "line2", "faint", "green-t", "red-t", "amber", "bg", "panel"]) COL[k] = cs.getPropertyValue("--" + k).trim();
+}
+function alpha(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; }
+const FONT = '10px "JetBrains Mono", ui-monospace, monospace';
+function fitCanvas(cv) {
+  const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(r.width)), h = Math.max(1, Math.round(r.height));
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h); ctx.font = FONT;
+  return { ctx, w, h };
+}
+function hm(ts) { return hms(ts).slice(0, 5); }
+function seriesShort(name) { const s = S.meta && S.meta.series.find((x) => x.name === name); return s ? s.label.replace("BTC ", "").replace(" Up/Down", "") : name; }
+function niceStep(range, target) { const raw = range / Math.max(1, target), p = Math.pow(10, Math.floor(Math.log10(raw))), m = raw / p; return (m < 1.5 ? 1 : m < 3 ? 2 : m < 7 ? 5 : 10) * p; }
+
+// ---------- tooltip (hover; touch shows it on tap) ----------
+const tipEl = $("tip");
+function showTip(x, y, text) { tipEl.textContent = text; tipEl.classList.remove("hidden"); const r = tipEl.getBoundingClientRect(); tipEl.style.left = Math.min(x + 12, innerWidth - r.width - 6) + "px"; tipEl.style.top = Math.max(4, y - r.height - 10) + "px"; }
+function hideTip() { tipEl.classList.add("hidden"); }
+function hover(cv, finder) {  // finder(xCss, yCss) -> text | null
+  const on = (e) => { const r = cv.getBoundingClientRect(); const p = e.touches ? e.touches[0] : e; const t = finder(p.clientX - r.left, p.clientY - r.top); t ? showTip(p.clientX, p.clientY, t) : hideTip(); };
+  cv.style.pointerEvents = "auto";
+  cv.addEventListener("mousemove", on); cv.addEventListener("mouseleave", hideTip);
+  cv.addEventListener("touchstart", on, { passive: true });
+}
+
+// ---------- lightweight-charts helpers ----------
+const LW = window.LightweightCharts;
+function lwBase(el, extra) {
+  return LW.createChart(el, Object.assign({
+    autoSize: true,
+    layout: { background: { type: LW.ColorType.Solid, color: "transparent" }, textColor: COL.dim, fontFamily: '"JetBrains Mono", monospace', fontSize: 9.5, attributionLogo: false },
+    grid: { vertLines: { color: alpha(COL.line, 0.9) }, horzLines: { color: alpha(COL.line, 0.9) } },
+    rightPriceScale: { borderColor: COL.line2 },
+    timeScale: { borderColor: COL.line2, timeVisible: true, secondsVisible: false, rightOffset: 3,
+                 tickMarkFormatter: (t) => hm(t) },
+    localization: { timeFormatter: (t) => hms(t) },
+    crosshair: { mode: LW.CrosshairMode.Normal, vertLine: { color: COL.line2, labelBackgroundColor: "#2a2238" }, horzLine: { color: COL.line2, labelBackgroundColor: "#2a2238" } },
+  }, extra || {}));
+}
+
+// ---------- BTC chart ----------
+const BTC = { chart: null, candles: null, s0line: null, markers: null, lastT: 0, times: [] };
+function initBtc() {
+  if (BTC.chart || !LW) return;
+  BTC.chart = lwBase($("c-btc"), { localization: { timeFormatter: (t) => hms(t), priceFormatter: (p) => price(p, 0) }, timeScale: { borderColor: COL.line2, timeVisible: true, secondsVisible: false, rightOffset: 6, barSpacing: 6, tickMarkFormatter: (t) => hm(t) } });
+  BTC.candles = BTC.chart.addSeries(LW.CandlestickSeries, {
+    upColor: COL.green, downColor: COL.red, borderVisible: false, wickUpColor: COL.green, wickDownColor: COL.red,
+    priceFormat: { type: "price", precision: 0, minMove: 1 }, priceLineVisible: false,
+  });
+  BTC.markers = LW.createSeriesMarkers(BTC.candles, []);
+  BTC.chart.timeScale().subscribeVisibleLogicalRangeChange(() => S.dirty.add("chartov"));
+  new ResizeObserver(() => S.dirty.add("chartov")).observe($("c-btc-wrap"));
+}
+function setBtcData() {
+  if (!BTC.candles) return;
+  const seen = new Map();
+  for (const c of S.candles) seen.set(Math.round(c[0]), c);
+  const rows = [...seen.entries()].sort((a, b) => a[0] - b[0]).map(([t, c]) => ({ time: t, open: c[1], high: c[2], low: c[3], close: c[4] }));
+  BTC.candles.setData(rows);
+  BTC.times = rows.map((r) => r.time);
+  BTC.lastT = rows.length ? rows[rows.length - 1].time : 0;
+  $("c-btc-empty").classList.toggle("hidden", rows.length > 0);
+  S.dirty.add("chart"); S.dirty.add("chartov");
+}
+function updateBtcCandle(c) {
+  if (!BTC.candles || !c) return;
+  const t = Math.round(c[0]);
+  if (t < BTC.lastT) return;  // never rewrite history
+  BTC.candles.update({ time: t, open: c[1], high: c[2], low: c[3], close: c[4] });
+  if (t > BTC.lastT) { BTC.times.push(t); BTC.lastT = t; $("c-btc-empty").classList.add("hidden"); }
+}
+function btcX(t) {  // time -> x, also between/after bars (window ends lie in the future)
+  const ts = BTC.chart.timeScale();
+  const exact = ts.timeToCoordinate(t);
+  if (exact != null) return exact;
+  const arr = BTC.times; if (!arr.length) return null;
+  let lo = 0, hi = arr.length - 1;
+  if (t <= arr[0]) { const x0 = ts.timeToCoordinate(arr[0]); return x0 == null ? null : x0 - ((arr[0] - t) / 60) * ts.options().barSpacing; }
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (arr[m] <= t) lo = m; else hi = m - 1; }
+  const xb = ts.timeToCoordinate(arr[lo]); if (xb == null) return null;
+  return xb + ((t - arr[lo]) / 60) * ts.options().barSpacing;
+}
+function renderBtc() {
+  if (!BTC.candles) return;
+  const w = win();
+  const s0 = w ? w.s0 : null;
+  if (s0 == null && BTC.s0line) { BTC.candles.removePriceLine(BTC.s0line); BTC.s0line = null; }
+  else if (s0 != null) {
+    if (!BTC.s0line) BTC.s0line = BTC.candles.createPriceLine({ price: s0, color: COL.mag, lineWidth: 1, lineStyle: LW.LineStyle.Dashed, axisLabelVisible: true, title: "S0" });
+    else if (BTC.s0line.options().price !== s0) BTC.s0line.applyOptions({ price: s0 });
+  }
+}
+function renderBtcMarkers() {
+  if (!BTC.markers) return;
+  const agg = new Map();
+  for (const t of S.trades.values()) {
+    if (t.series !== S.series || !t.ts_fill) continue;
+    const m = Math.floor(t.ts_fill / 60) * 60, k = m + t.side;
+    const a = agg.get(k) || { time: m, side: t.side, n: 0 }; a.n++; agg.set(k, a);
+  }
+  const mk = [...agg.values()].sort((a, b) => a.time - b.time).map((a) => ({
+    time: a.time, position: a.side === "Up" ? "belowBar" : "aboveBar", shape: a.side === "Up" ? "arrowUp" : "arrowDown",
+    color: a.side === "Up" ? COL.green : COL.red, text: a.n > 1 ? "×" + a.n : "", size: 0.8,
+  }));
+  BTC.markers.setMarkers(mk);
+}
+function drawBtcOverlay() {
+  if (!BTC.chart) return;
+  const cv = $("c-btc-ov"); const { ctx, w, h } = fitCanvas(cv);
+  const ser = S.meta.series.find((x) => x.name === S.series); if (!ser) return;
+  const iv = ser.interval_s, ts = BTC.chart.timeScale();
+  const vr = ts.getVisibleRange(); if (!vr) return;
+  const plotW = w - BTC.chart.priceScale("right").width();
+  ctx.save(); ctx.beginPath(); ctx.rect(0, 0, plotW, h); ctx.clip();
+  // window boundaries of the selected market
+  ctx.strokeStyle = alpha(COL.grey, 0.45); ctx.setLineDash([2, 3]); ctx.lineWidth = 1;
+  for (let t = Math.ceil(vr.from / iv) * iv; t <= vr.to + iv; t += iv) {
+    const x = btcX(t); if (x == null || x < 0 || x > plotW) continue;
+    ctx.beginPath(); ctx.moveTo(Math.round(x) + 0.5, 0); ctx.lineTo(Math.round(x) + 0.5, h); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  // start price (S0) of each window: past windows coloured by the side that won
+  const cur = win();
+  for (const wd of S.winRecent.values()) {
+    if (wd.series !== S.series || wd.s0 == null) continue;
+    const isCur = cur && wd.slug === cur.slug;
+    const x0 = btcX(wd.start), x1 = btcX(wd.end), y = BTC.candles.priceToCoordinate(isCur ? cur.s0 : wd.s0);
+    if (x0 == null || x1 == null || y == null || x1 < 0 || x0 > plotW) continue;
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = isCur ? COL.mag : wd.outcome === "Up" ? COL.green : wd.outcome === "Down" ? COL.red : COL.grey;
+    if (isCur) ctx.setLineDash([5, 3]);
+    ctx.beginPath(); ctx.moveTo(Math.max(0, x0), Math.round(y) + 0.5); ctx.lineTo(Math.min(plotW, x1), Math.round(y) + 0.5); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
+}
+
+// ---------- order book ----------
+function ladderHtml(label, book, fair, fee) {
+  const head = `<div class="lh"><span>${label}</span><span>${fair != null ? "fair <b>" + fair.toFixed(3) + "</b>" : "fair —"}</span></div>`;
+  if (!book) return head + `<div class="lr spr">no book</div>`;
+  if (!book.ready) return head + `<div class="lr spr">waiting for book</div>`;
+  const asks = (book.asks || []).slice(0, 5), bids = (book.bids || []).slice(0, 5);
+  const maxSz = Math.max(1, ...asks.map((a) => a[1]), ...bids.map((b) => b[1]));
+  const row = (cls, p, sz, bestRow) => `<div class="lr ${cls}${bestRow ? " best" : ""}" title="${cls} ${p} × ${sz.toLocaleString("en-US")} shares"><span class="bar" style="width:${(100 * sz / maxSz).toFixed(1)}%"></span><span class="p">${px(p)}</span><span class="s">${sz >= 10000 ? (sz / 1000).toFixed(1) + "k" : Math.round(sz).toLocaleString("en-US")}</span></div>`;
+  const items = [];  // descending by price; the fair marker goes where it belongs
+  for (let i = asks.length - 1; i >= 0; i--) items.push({ p: asks[i][0], h: row("ask", asks[i][0], asks[i][1], i === 0) });
+  const a0 = asks.length ? asks[0][0] : null, b0 = bids.length ? bids[0][0] : null;
+  items.push({ p: a0 != null && b0 != null ? (a0 + b0) / 2 : a0 != null ? a0 - 1e-9 : b0 != null ? b0 + 1e-9 : 0.5, h: `<div class="lr spr">${a0 != null && b0 != null ? "spread " + (100 * (a0 - b0)).toFixed(1) + "¢" : "one-sided book"}</div>`, spread: true });
+  bids.forEach((b, i) => items.push({ p: b[0], h: row("bid", b[0], b[1], i === 0) }));
+  let out = "", placed = fair == null;
+  for (const it of items) {
+    if (!placed && fair >= it.p) { out += `<div class="lr fair">fair ${fair.toFixed(3)}</div>`; placed = true; }
+    out += it.h;
+  }
+  if (!placed) out += `<div class="lr fair">fair ${fair.toFixed(3)}</div>`;
+  let foot = "";
+  if (a0 != null && fair != null && fee) {
+    const f = fee.rate * Math.pow(a0 * (1 - a0), fee.exp);
+    const e = fair - a0 - f;
+    foot = `<div class="lf" title="fair − best ask − taker fee, per share">edge <span class="${pnlClass(e)}">${cents(e)}</span> · fee ${(100 * f).toFixed(2)}¢</div>`;
+  }
+  return head + out + foot;
+}
+function renderBook() {
+  const w = win(), m = S.meta;
+  setText($("bk-mkt"), w ? seriesShort(w.series) + " · " + mmss(w.end - serverNow()) + " left" : "");
+  const fu = w && w.fair_up != null ? w.fair_up : null;
+  for (const [id, label, book, fair] of [["lad-up", "UP", w && w.up, fu], ["lad-dn", "DOWN", w && w.down, fu == null ? null : 1 - fu]]) {
+    const el = $(id), h = w ? ladderHtml(label, book, fair, w.fee) : `<div class="lh"><span>${label}</span></div><div class="lr spr">no live market</div>`;
+    if (el._h !== h) { el.innerHTML = h; el._h = h; }
+  }
+}
+
+// ---------- streak ----------
+function settledStats() { return [...S.tradeStats.values()].filter((r) => r[7] === "WON" || r[7] === "LOST").sort((a, b) => (a[9] || 0) - (b[9] || 0) || a[0] - b[0]); }
+function renderStreak() {
+  const st = S.stats;
+  const settled = settledStats();
+  setText($("stk-n"), settled.length ? settled.length + " settled" : "");
+  const v = $("stk-v");
+  if (!st || !st.streak) { setText(v, "—"); v.className = "v num"; setText($("stk-sub"), st ? "no settled trades yet" : ""); }
+  else {
+    const n = Math.abs(st.streak), won = st.streak > 0;
+    setText(v, (won ? "W" : "L") + n); v.className = "v num " + (won ? "up" : "dn");
+    let lw = 0, ll = 0, cw = 0, cl = 0;
+    for (const r of settled) { if (r[7] === "WON") { cw++; cl = 0; lw = Math.max(lw, cw); } else { cl++; cw = 0; ll = Math.max(ll, cl); } }
+    setText($("stk-sub"), `in a row · longest W${lw}/L${ll}`);
+  }
+  setNum($("stk-best"), null, st && st.best != null ? usd(st.best, true) : "—", st && st.best != null ? pnlClass(st.best) : "");
+  setNum($("stk-worst"), null, st && st.worst != null ? usd(st.worst, true) : "—", st && st.worst != null ? pnlClass(st.worst) : "");
+  setText($("stk-fees"), st ? usd(st.fees_all) : "—");
+  setText($("stk-fpt"), st && st.trades ? usd(st.fees_all / st.trades) : "—");
+  // bars: last 40 settled trades
+  const cv = $("c-stk"); const { ctx, w, h } = fitCanvas(cv);
+  const last = settled.slice(-40);
+  $("c-stk-empty").classList.toggle("hidden", last.length > 0);
+  STK.bars = [];
+  if (!last.length) return;
+  const maxAbs = Math.max(0.01, ...last.map((r) => Math.abs(r[3] || 0)));
+  const mid = Math.round(h / 2) + 0.5, slot = w / 40, bw = Math.max(2, Math.min(10, slot - 2));
+  ctx.strokeStyle = COL.line2; ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(w, mid); ctx.stroke();
+  last.forEach((r, i) => {
+    const p = r[3] || 0, bh = Math.max(1, (Math.abs(p) / maxAbs) * (h / 2 - 3));
+    const x = w - (last.length - i) * slot + (slot - bw) / 2;
+    ctx.fillStyle = p >= 0 ? COL.green : COL.red;
+    const y = p >= 0 ? mid - bh : mid;
+    roundBar(ctx, x, y, bw, bh, p >= 0);
+    STK.bars.push({ x0: x - 1, x1: x + bw + 1, r });
+  });
+}
+const STK = { bars: [] };
+function roundBar(ctx, x, y, w, h, up) {  // 2px rounded data-end, flat at the baseline
+  const rr = Math.min(2, w / 2, h);
+  ctx.beginPath();
+  if (up) { ctx.moveTo(x, y + h); ctx.lineTo(x, y + rr); ctx.quadraticCurveTo(x, y, x + rr, y); ctx.lineTo(x + w - rr, y); ctx.quadraticCurveTo(x + w, y, x + w, y + rr); ctx.lineTo(x + w, y + h); }
+  else { ctx.moveTo(x, y); ctx.lineTo(x, y + h - rr); ctx.quadraticCurveTo(x, y + h, x + rr, y + h); ctx.lineTo(x + w - rr, y + h); ctx.quadraticCurveTo(x + w, y + h, x + w, y + h - rr); ctx.lineTo(x + w, y); }
+  ctx.closePath(); ctx.fill();
+}
+
+// ---------- signal map ----------
+const MAP = { pts: [], last: 0 };
+function mapClass(s) {
+  if (s.decision === "filled") return "filled";
+  if (s.decision === "pending") return "pending";
+  if (s.decision === "missed") return "missed";  // order sent; the book moved during the latency
+  return "skipped";
+}
+function drawMap() {
+  const cv = $("c-map"); const { ctx, w, h } = fitCanvas(cv);
+  const now = serverNow(), span = (S.meta.signal_window_min || 30) * 60, t0 = now - span;
+  for (const [id, s] of S.signals) if (s.ts < t0 - 60) S.signals.delete(id);
+  const sig = [...S.signals.values()].filter((s) => s.ts >= t0 && s.net_edge != null);
+  $("c-map-empty").classList.toggle("hidden", sig.length > 0);
+  const L = 44, R = 8, T = 6, B = 16, pw = w - L - R, ph = h - T - B;
+  const vals = sig.map((s) => 100 * s.net_edge).sort((a, b) => a - b);
+  const buf = 100 * (S.meta.safety_buffer || 0.01);
+  // scale to the middle 98% so one outlier doesn't flatten the rest (outliers get an arrow)
+  let lo = Math.min(-3, vals.length ? quantile(vals, 0.01) : 0), hi = Math.max(buf + 2, vals.length ? quantile(vals, 0.99) : 0);
+  lo = Math.max(lo, -25); hi = Math.min(hi, 25);
+  const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+  const X = (t) => L + ((t - t0) / span) * pw, Y = (v) => T + (1 - (Math.min(Math.max(v, lo), hi) - lo) / (hi - lo)) * ph;
+  // grid + axes (recessive)
+  ctx.fillStyle = COL.dim; ctx.strokeStyle = alpha(COL.line, 1); ctx.lineWidth = 1; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  const step = niceStep(hi - lo, 5);
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
+    const y = Math.round(Y(v)) + 0.5; ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(w - R, y); ctx.stroke();
+    ctx.fillText((v > 0 ? "+" : v < 0 ? MINUS : "") + Math.abs(v).toFixed(step < 1 ? 1 : 0) + "¢", L - 5, y);
+  }
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (let t = Math.ceil(t0 / 300) * 300; t <= now; t += 300) { const x = X(t); ctx.fillText(hm(t), x, h - B + 3); }
+  // window starts of the selected market
+  const ser = S.meta.series.find((x) => x.name === S.series);
+  if (ser) {
+    ctx.strokeStyle = alpha(COL.grey, 0.35); ctx.setLineDash([2, 3]);
+    for (let t = Math.ceil(t0 / ser.interval_s) * ser.interval_s; t <= now; t += ser.interval_s) { const x = Math.round(X(t)) + 0.5; ctx.beginPath(); ctx.moveTo(x, T); ctx.lineTo(x, T + ph); ctx.stroke(); }
+    ctx.setLineDash([]);
+  }
+  // zero and buffer
+  ctx.strokeStyle = COL.dim; ctx.beginPath(); ctx.moveTo(L, Math.round(Y(0)) + 0.5); ctx.lineTo(w - R, Math.round(Y(0)) + 0.5); ctx.stroke();
+  ctx.strokeStyle = COL.mag; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(L, Math.round(Y(buf)) + 0.5); ctx.lineTo(w - R, Math.round(Y(buf)) + 0.5); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle = COL.mag; ctx.textAlign = "left"; ctx.textBaseline = "bottom"; ctx.fillText("buffer " + buf.toFixed(1) + "¢", L + 4, Y(buf) - 2);
+  // dots: skipped first (recessive), then missed, then filled on top
+  MAP.pts = [];
+  const order = { skipped: 0, missed: 1, pending: 2, filled: 3 };
+  sig.sort((a, b) => order[mapClass(a)] - order[mapClass(b)]);
+  for (const s of sig) {
+    const c = mapClass(s), x = X(s.ts), v = 100 * s.net_edge, y = Y(v), up = s.side === "Up";
+    const r = c === "skipped" ? 2.5 : 4.5;
+    tri(ctx, x, y, r, up);
+    if (c === "skipped") { ctx.fillStyle = alpha(COL.grey, 0.7); ctx.fill(); }
+    else if (c === "missed" || c === "pending") { ctx.lineWidth = 1.5; ctx.strokeStyle = c === "missed" ? COL.series2 : COL.mag; ctx.stroke(); }
+    else { ctx.fillStyle = COL.mag; ctx.fill(); ctx.lineWidth = 1; ctx.strokeStyle = COL.panel; ctx.stroke(); }
+    if (v > hi || v < lo) { ctx.fillStyle = COL.dim; ctx.fillText(v > hi ? "↑" : "↓", x + 5, y + (v > hi ? 8 : 0)); }
+    MAP.pts.push({ x, y, s, c });
+  }
+}
+function tri(ctx, x, y, r, up) { ctx.beginPath(); if (up) { ctx.moveTo(x, y - r); ctx.lineTo(x + r, y + r * 0.8); ctx.lineTo(x - r, y + r * 0.8); } else { ctx.moveTo(x, y + r); ctx.lineTo(x + r, y - r * 0.8); ctx.lineTo(x - r, y - r * 0.8); } ctx.closePath(); }
+function mapTip(x, y) {
+  let best = null, bd = 100;
+  for (const p of MAP.pts) { const d = (p.x - x) ** 2 + (p.y - y) ** 2; if (d < bd) { bd = d; best = p; } }
+  if (!best) return null;
+  const s = best.s, what = { filled: "FILLED" + (s.trade_id ? " → trade #" + s.trade_id : ""), pending: "order in flight", missed: "MISSED AT FILL", skipped: "skipped" }[best.c];
+  return `${hms(s.ts)} · ${seriesShort(s.series)} ${s.side.toUpperCase()} · ${what}\n` +
+    `fair ${s.fair != null ? s.fair.toFixed(3) : "—"} · ask ${px(s.best_ask)} · fee ${s.fee_ps != null ? (100 * s.fee_ps).toFixed(2) : "—"}¢/sh\n` +
+    `net edge ${cents(s.net_edge)} (buffer ${cents(s.threshold)})` + (s.reason ? `\n${s.reason}` : "") +
+    (s.shares ? `\n${s.shares} sh · $${(s.usd || 0).toFixed(2)}` : "");
+}
+
+// ---------- equity ----------
+const EQ = { chart: null, net: null, zero: null, dd: null };
+function initEquity() {
+  if (EQ.chart || !LW) return;
+  EQ.chart = lwBase($("c-eq"), { localization: { timeFormatter: (t) => hms(t), priceFormatter: (p) => (p < 0 ? MINUS : "") + "$" + Math.abs(p).toFixed(2) } });
+  EQ.dd = EQ.chart.addSeries(LW.BaselineSeries, { baseValue: { type: "price", price: 0 },
+    topLineColor: "transparent", topFillColor1: "transparent", topFillColor2: "transparent",
+    bottomLineColor: alpha(COL.red, 0.8), bottomFillColor1: alpha(COL.red, 0.3), bottomFillColor2: alpha(COL.red, 0.3),
+    lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: "dd" });
+  EQ.zero = EQ.chart.addSeries(LW.LineSeries, { color: COL.series2, lineWidth: 2, lineStyle: LW.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: true, title: "0-fee" });
+  EQ.net = EQ.chart.addSeries(LW.LineSeries, { color: COL.mag, lineWidth: 2, priceLineVisible: false, lastValueVisible: true, title: "net" });
+  EQ.net.createPriceLine({ price: 0, color: COL.dim, lineWidth: 1, lineStyle: LW.LineStyle.Dotted, axisLabelVisible: false });
+}
+function renderEquity() {
+  if (!EQ.chart) return;
+  const eq = (S.stats && S.stats.equity) || [];
+  $("c-eq-empty").classList.toggle("hidden", eq.length > 0);
+  const by = new Map();
+  for (const r of eq) by.set(Math.floor(r[0]), r);  // one point per second (chart needs unique times)
+  const rows = [...by.entries()].sort((a, b) => a[0] - b[0]);
+  if (rows.length) rows.unshift([rows[0][0] - 60, [rows[0][0] - 60, 0, 0, 0]]);  // start at 0
+  EQ.net.setData(rows.map(([t, r]) => ({ time: t, value: r[1] })));
+  EQ.zero.setData(rows.map(([t, r]) => ({ time: t, value: r[2] })));
+  EQ.dd.setData(rows.map(([t, r]) => ({ time: t, value: r[3] })));
+  if (rows.length && !EQ.fitted) { EQ.chart.timeScale().fitContent(); EQ.fitted = true; }
+}
+
+// ---------- recent trades ----------
+function renderTrades() {
+  const all = [...S.trades.values()].sort((a, b) => b.id - a.id);
+  const list = all.slice(0, 80);
+  setText($("tr-n"), S.stats ? `${S.stats.trades} this run` : "");
+  $("tr-empty").classList.toggle("hidden", list.length > 0);
+  let h = "";
+  for (const t of list) {
+    const pnl = t.pnl != null ? `<span class="${pnlClass(t.pnl)}">${usd(t.pnl, true)}</span>` : `<span class="mut">${usd(-(t.cost + (t.fee_in === "collateral" ? t.fee : 0)))}</span>`;
+    const tip = `#${t.id} ${t.slug}\nfilled ${hms(t.ts_fill)} after ${Math.round(t.latency_ms)}ms · signal ask ${px(t.signal_ask)}\n` +
+      `cost $${t.cost.toFixed(2)} + fee $${t.fee.toFixed(3)}` + (t.pnl != null ? `\nnet ${usd(t.pnl, true)} · zero-fee ${usd(t.pnl_zero_fee, true)}` : "\nopen: shown as money at risk");
+    h += `<tr title="${tip}"><td class="mut">${hms(t.ts_fill)}</td><td>${seriesShort(t.series)}</td>` +
+      `<td class="${t.side === "Up" ? "up" : "dn"}">${t.side === "Up" ? "▲ UP" : "▼ DN"}</td>` +
+      `<td>${t.shares.toFixed(2)} @ ${t.avg_price.toFixed(3)}</td><td>${t.fair_signal.toFixed(3)}</td>` +
+      `<td class="${pnlClass(t.edge_entry)}">${cents(t.edge_entry)}</td><td class="mut">$${t.fee.toFixed(3)}</td>` +
+      `<td><span class="st ${t.status}">${t.status}</span></td><td>${pnl}</td></tr>`;
+  }
+  const body = $("tr-body"); if (body._h !== h) { body.innerHTML = h; body._h = h; }
+}
+
+// ---------- analytics histograms ----------
+const HIST = { bins: [], tab: "whatif" };
+const HDEF = {
+  edge: { idx: 2, scale: 100, unit: "¢", label: "edge at entry, per share (after fee)", settledOnly: false, polar: false },
+  pnl: { idx: 3, scale: 1, unit: "$", label: "net P&L per settled trade", settledOnly: true, polar: true },
+  slip: { idx: 5, scale: 100, unit: "¢", label: "slippage per share (avg fill − signal ask)", settledOnly: false, polar: false },
+  lat: { idx: 6, scale: 1, unit: "ms", label: "signal → fill latency", settledOnly: false, polar: false },
+};
+function fmtU(v, u) { return u === "$" ? usd(v, true) : u === "ms" ? Math.round(v) + "ms" : signed(v, 2) + "¢"; }
+function quantile(sorted, q) { if (!sorted.length) return null; const i = (sorted.length - 1) * q, lo = Math.floor(i), hi = Math.ceil(i); return sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo); }
+function drawHist() {
+  const d = HDEF[HIST.tab]; if (!d) return;
+  const rows = [...S.tradeStats.values()].filter((r) => !d.settledOnly || r[7] === "WON" || r[7] === "LOST");
+  const vals = rows.map((r) => r[d.idx]).filter((v) => v != null && isFinite(v)).map((v) => v * d.scale).sort((a, b) => a - b);
+  const cv = $("c-hist"); const { ctx, w, h } = fitCanvas(cv);
+  $("c-hist-empty").classList.toggle("hidden", vals.length > 0);
+  HIST.bins = [];
+  if (!vals.length) { $("an-stats").innerHTML = d.label; return; }
+  let lo = quantile(vals, 0.01), hi = quantile(vals, 0.99);
+  if (hi - lo < 1e-9) { lo -= 1; hi += 1; }
+  const nb = Math.min(24, Math.max(6, Math.round(Math.sqrt(vals.length) * 1.5)));
+  const bw = (hi - lo) / nb, counts = new Array(nb).fill(0);
+  for (const v of vals) counts[Math.min(nb - 1, Math.max(0, Math.floor((v - lo) / bw)))]++;
+  const L = 8, R = 8, T = 12, B = 16, pw = w - L - R, ph = h - T - B, maxC = Math.max(...counts);
+  const slot = pw / nb, bwp = Math.max(1, slot - 2);
+  ctx.strokeStyle = COL.line2; ctx.beginPath(); ctx.moveTo(L, T + ph + 0.5); ctx.lineTo(w - R, T + ph + 0.5); ctx.stroke();
+  counts.forEach((c, i) => {
+    const a = lo + i * bw, b = a + bw, x = L + i * slot + 1, bh = c ? Math.max(1, (c / maxC) * ph) : 0;
+    const mid = (a + b) / 2;
+    ctx.fillStyle = d.polar ? (mid >= 0 ? COL.green : COL.red) : COL.mag;
+    if (bh) roundBar(ctx, x, T + ph - bh, bwp, bh, true);
+    HIST.bins.push({ x0: x - 1, x1: x + bwp + 1, a, b, c, first: i === 0, last: i === nb - 1 });
+  });
+  if (lo < 0 && hi > 0) { const x = Math.round(L + ((0 - lo) / (hi - lo)) * pw) + 0.5; ctx.strokeStyle = COL.dim; ctx.setLineDash([2, 2]); ctx.beginPath(); ctx.moveTo(x, T - 4); ctx.lineTo(x, T + ph); ctx.stroke(); ctx.setLineDash([]); }
+  ctx.fillStyle = COL.dim; ctx.textBaseline = "top";
+  ctx.textAlign = "left"; ctx.fillText("≤" + fmtU(lo, d.unit), L, T + ph + 3);
+  ctx.textAlign = "right"; ctx.fillText("≥" + fmtU(hi, d.unit), w - R, T + ph + 3);
+  ctx.textBaseline = "alphabetic"; ctx.fillText("max " + maxC + " trades/bin", w - R, T - 2);
+  const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+  let extra = "";
+  if (HIST.tab === "edge" && S.stats && S.stats.avg_realized_per_share != null) extra = ` · realized <b class="${pnlClass(S.stats.avg_realized_per_share)}">${cents(S.stats.avg_realized_per_share)}</b>/share on settled trades`;
+  if (HIST.tab === "pnl") { const wn = vals.filter((v) => v > 0).length; extra = ` · won ${wn}/${vals.length}`; }
+  if (HIST.tab === "lat") extra = ` · p95 <b>${Math.round(quantile(vals, 0.95))}ms</b> (configured ${Math.round(S.meta.latency_ms)}ms)`;
+  $("an-stats").innerHTML = `${d.label} · n <b>${vals.length}</b> · mean <b>${fmtU(mean, d.unit)}</b> · median <b>${fmtU(quantile(vals, 0.5), d.unit)}</b>${extra}`;
+}
+function histTip(x) {
+  const b = HIST.bins.find((b) => x >= b.x0 && x <= b.x1); if (!b) return null;
+  const d = HDEF[HIST.tab];
+  return `${b.first ? "≤ " : ""}${fmtU(b.a, d.unit)} … ${b.last ? "≥ " : ""}${fmtU(b.b, d.unit)}\n${b.c} trade${b.c === 1 ? "" : "s"}`;
+}
+function setAnTab(t) {
+  HIST.tab = t;
+  for (const b of $("an-tabs").children) b.classList.toggle("on", b.dataset.t === t);
+  $("an-wi").classList.toggle("hidden", t !== "whatif");
+  $("an-hist").classList.toggle("hidden", t === "whatif");
+  S.dirty.add("hist"); S.dirty.add("footer");
+}
+
+function initPanels() {
+  readColors();
+  initBtc(); initEquity();
+  hover($("c-map"), mapTip);
+  hover($("c-hist"), (x) => histTip(x));
+  hover($("c-stk"), (x) => { const b = STK.bars.find((b) => x >= b.x0 && x <= b.x1); if (!b) return null; const r = b.r; return `trade #${r[0]} · ${r[7]}\nnet ${usd(r[3], true)} · zero-fee ${usd(r[4], true)}\nfee $${(r[8] || 0).toFixed(3)}`; });
+  $("an-tabs").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setAnTab(b.dataset.t); });
+  new ResizeObserver(() => { S.dirty.add("map"); S.dirty.add("streak"); S.dirty.add("hist"); }).observe($("grid"));
 }
 
 // ---------- interactions (display only; nothing is sent to the bot) ----------
@@ -630,7 +1160,7 @@ $("h-mkt").addEventListener("click", () => {
   if (!S.meta) return;
   const names = S.meta.series.map((x) => x.name);
   S.series = names[(names.indexOf(S.series) + 1) % names.length];
-  ["header", "strip"].forEach((k) => S.dirty.add(k));
+  ["header", "strip", "chart", "chartmk", "chartov", "book", "map"].forEach((k) => S.dirty.add(k));
 });
 function onTagClick(e) {
   const t = e.target.closest(".tag"); if (!t || !t.dataset.tag) return;

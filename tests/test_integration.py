@@ -100,6 +100,8 @@ def test_end_to_end_against_fake_exchange(tmp_path, capsys):
     assert seen["order"][0] == "snapshot"
     assert snap["meta"]["paper"] is True and snap["meta"]["source"] == "realtime"
     assert snap["meta"]["test_feed"] is True  # not Polymarket's production host
+    assert isinstance(snap["trade_stats"], list) and isinstance(snap["windows_recent"], list)
+    assert snap["windows_recent"] and all({"slug", "start", "end", "s0", "outcome"} <= set(w) for w in snap["windows_recent"])
     assert 14 <= seen["ticks_5_10s"] <= 26
     assert "log" in seen["order"]
 

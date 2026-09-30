@@ -180,6 +180,24 @@ class LiveSource:
             "whatif": app.whatif_summary(now),
         }
 
+    def recent_windows(self, now: float, hours: float = 8.0) -> list[dict[str, Any]]:
+        """Market windows of the last few hours with their start price and outcome (chart overlay)."""
+        if self.app.db is None:
+            return []
+        use_ptb = self.app.cfg.model.strike_source == "polymarket"
+        rows = self.app.db.conn.execute(
+            "SELECT slug, series, start_ts, end_ts, s0_chainlink, ptb_polymarket, s0_coinbase, end_chainlink, "
+            "resolved_outcome FROM markets WHERE end_ts >= ? AND start_ts <= ? ORDER BY start_ts",
+            (now - hours * 3600, now),
+        ).fetchall()
+        src = self.app.cfg.model.strike_source
+        out = []
+        for slug, series, st, et, s0cl, ptb, s0cb, end_cl, res in rows:
+            s0 = (ptb if use_ptb and ptb is not None else s0cl) if src != "coinbase" else s0cb
+            out.append({"slug": slug, "series": series, "start": st, "end": et, "s0": s0, "end_px": end_cl,
+                        "outcome": res})
+        return out
+
     def snapshot(self) -> dict[str, Any]:
         app = self.app
         now = time.time()
@@ -197,6 +215,9 @@ class LiveSource:
             "log": [list(x) for x in app.log_ring],
             "log_counts": dict(app.log_counts),
             "trades": [t.public() for t in eng.trades[-300:]] if eng else [],
+            # Every trade of the current run in compact form (Trade.stat) for streak bars and histograms.
+            "trade_stats": [t.stat() for t in eng.trades] if eng else [],
+            "windows_recent": self.recent_windows(now),
             "signals": signals,
             "candles": app.candles.all(),
         })

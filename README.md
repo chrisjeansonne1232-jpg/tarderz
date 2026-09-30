@@ -230,6 +230,21 @@ messages sent to its WebSocket are ignored. The account is always labelled
   log tag to filter the log. Hover the log to pause auto-scroll (on an iPad,
   tap it).
 
+Panels (hover any chart point, bar or row for details):
+
+| panel | what it shows |
+|---|---|
+| Wallet | bankroll of the current run, net P&L (zero-fee smaller), trades, win rate, profit factor, max drawdown, fees, money in play |
+| BTC-USD 1m | Coinbase candles; S0 of the live window (dashed); earlier windows' S0 coloured by which side won; window boundaries; our fills (▲ Up / ▼ Down, ×n per minute) |
+| Order book | top 5 asks and bids for Up and Down, with a marker where the model's fair value falls and the edge at the best ask after the fee |
+| Streak | current win/loss streak, longest streaks, best/worst trade, fees, and a bar per settled trade (last 40) |
+| Signal map | the last 30 min of opportunities: net edge after fee and slippage over time against the buffer line. Filled, missed at fill (order sent, book moved during the latency), and skipped (sampled, at most one per market side every 5 s; full counts are in the archive) |
+| Equity | cumulative net P&L vs zero-fee, and drawdown |
+| Recent trades | the latest 80 fills with price, fair value, edge, fee, status and P&L |
+| Analytics | latency what-if table; histograms of edge at entry, P&L per trade, slippage and latency |
+
+Replay mode (`--replay`) is not built yet.
+
 Screenshots for layout checks: `python tools/screenshot.py http://127.0.0.1:8787 shots/`
 (needs `pip install playwright`). It captures 1440×900 and 1180×820, and
 reports anything that overflows or scrolls.

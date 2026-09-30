@@ -96,8 +96,10 @@ whatif_trades.csv  trades of the latency what-if wallets ("whatif-0ms" etc.): th
     edge_after_fee      edge_before_fee - fee_per_share
     net_edge            fair_value - vwap - fee_per_share - slippage allowance
     buffer              net_edge must be above this to trade
-    decision            filled, skipped, or pending (still in flight)
-    reason              why it was skipped
+    decision            filled; missed (order sent, but the book changed during the latency
+                        and it didn't fill; before v0.6 these were marked skipped);
+                        skipped (not sent); pending (still in flight)
+    reason              why it was skipped or missed
 
 <day>/windows.csv   one row per market window that started that day
     start_price / end_price     Chainlink price used for the window's start / end
