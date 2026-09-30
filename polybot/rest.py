@@ -55,6 +55,11 @@ class GammaClient(_Rest):
             return data[0] if data else None
         return data or None
 
+    async def event_by_slug_path(self, slug: str) -> dict | None:
+        """GET /events/slug/{slug}: the single-event endpoint (may carry fields the list endpoint omits)."""
+        data = await self.get(f"/events/slug/{slug}")
+        return data if isinstance(data, dict) and data else None
+
     async def events_by_series(self, series_slug: str, limit: int = 100) -> list[dict]:
         data = await self.get(
             "/events",

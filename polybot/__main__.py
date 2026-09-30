@@ -14,6 +14,7 @@ from pathlib import Path
 
 import aiohttp
 
+from . import __version__
 from .app import App
 from .config import Config, ConfigError, load_config
 from .db import Database
@@ -130,6 +131,8 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--open", action="store_true", help="open the dashboard in your browser once it is up")
     sub.add_parser("discover", help="look up the current markets once and print everything we rely on")
     sub.add_parser("report", help="print paper-trading performance from the database")
+    p_win = sub.add_parser("windows", help="list recent market windows: start/end prices, how they were captured, outcome")
+    p_win.add_argument("-n", type=int, default=20, help="how many windows (default 20)")
     args = ap.parse_args(argv)
     try:
         cfg = load_config(args.config)
@@ -142,11 +145,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "report":
         return report(cfg)
+    if args.cmd == "windows":
+        return windows(cfg, args.n)
     if getattr(args, "host", None):
         cfg.dashboard.dashboard_host = args.host
     if getattr(args, "port", None):
         cfg.dashboard.dashboard_port = args.port
     setup_logging(cfg, console_level="WARNING")
+    print(f"polybot v{__version__} ({args.cmd}; paper only, never places orders)", flush=True)
     keep_awake()
     try:
         asyncio.run(run_app(cfg, args.cmd, dashboard=args.dashboard, open_browser=args.open and args.dashboard))
@@ -179,6 +185,57 @@ def report(cfg: Config) -> int:
     else:
         print(f"  S0 check               {s0['matched']}/{s0['compared']} windows within $0.50 of Polymarket's price to beat"
               + (f" (median gap ${s0['median_abs_diff']:.2f}, max ${s0['max_abs_diff']:.2f})" if s0["compared"] else ""))
+    return 0
+
+
+def _offset(obs_ts: float | None, boundary: float | None) -> str:
+    if obs_ts is None or boundary is None:
+        return "-"
+    return f"{obs_ts - boundary:+.2f}s"
+
+
+def _price(v: float | None) -> str:
+    return f"{v:,.2f}" if v is not None else "-"
+
+
+def windows(cfg: Config, n: int) -> int:
+    """Show what happened to each recent window's start and end price."""
+    path = Path(cfg.general.db_path)
+    if not path.exists():
+        print(f"no database at {path}; run `python -m polybot run` first", file=sys.stderr)
+        return 1
+    db = Database(str(path), read_only=True)
+    try:
+        rows = db.conn.execute(
+            "SELECT slug, series, start_ts, end_ts, s0_status, s0_chainlink, s0_chainlink_ts, end_status, "
+            "end_chainlink, end_chainlink_ts, chainlink_predicted, resolved_outcome, ptb_polymarket "
+            "FROM markets ORDER BY start_ts DESC, series LIMIT ?",
+            (n,),
+        ).fetchall()
+    finally:
+        db.close()
+    if not rows:
+        print("no windows recorded yet")
+        return 0
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(cfg.dashboard.timezone)
+    except Exception:  # noqa: BLE001 - no tz database: fall back to UTC
+        tz = None
+    from datetime import datetime, timezone
+    print("start/end = Chainlink report used for the window boundary; offset = report time minus boundary")
+    print("(+0.00s means stamped exactly at the boundary). ptb = Polymarket's published price to beat.\n")
+    hdr = f"{'start':<6} {'series':<8} {'S0':<7} {'start price':>12} {'off':>7}  {'END':<7} {'end price':>12} {'off':>7}  {'ours':<5} {'result':<7} {'ptb':>12}"
+    print(hdr)
+    print("-" * len(hdr))
+    for (slug, series, st, et, s0s, s0, s0t, es, e, et_ts, pred, res, ptb) in rows:
+        when = datetime.fromtimestamp(st, tz or timezone.utc).strftime("%H:%M")
+        agree = ""
+        if pred and res:
+            agree = " ok" if pred == res else " X"
+        print(f"{when:<6} {series or '':<8} {s0s or '-':<7} {_price(s0):>12} {_offset(s0t, st):>7}  "
+              f"{es or '-':<7} {_price(e):>12} {_offset(et_ts, et):>7}  {pred or '-':<5} {(res or 'pending') + agree:<7} {_price(ptb):>12}")
+    print(f"\ntimes in {cfg.dashboard.timezone if tz else 'UTC'}; 'ours' = outcome our Chainlink prices imply, X = disagreed with Polymarket")
     return 0
 
 

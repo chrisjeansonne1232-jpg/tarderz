@@ -10,6 +10,7 @@ param(
 )
 
 if ($env:POLYBOT_CONFIG -and $Config -eq "config.toml") { $Config = $env:POLYBOT_CONFIG }  # for testing
+if ($env:POLYBOT_IPAD) { $Ipad = $true }  # set by update.ps1 -Ipad (the "Polybot (iPad)" shortcut)
 Set-Location -LiteralPath $PSScriptRoot
 $env:PYTHONUTF8 = "1"
 $onWindows = ($env:OS -eq "Windows_NT")
@@ -127,3 +128,4 @@ if ($Ipad) {
 }
 Say "starting paper trading - press Ctrl+C to stop (keep this window open)"
 & $vpy @botArgs
+if ($LASTEXITCODE -ne 0 -and $onWindows) { Read-Host "polybot stopped with an error (see above). Press Enter to close" | Out-Null }

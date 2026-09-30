@@ -396,12 +396,38 @@ class SeriesTracker:
         if ptb is None:
             if event:
                 w._ptb_fields = price_like_fields(event)
+            # The single-event endpoint may carry metadata the list endpoint leaves out.
+            try:
+                alt = await self.gamma.event_by_slug_path(w.slug)
+            except HttpError as e:
+                log.debug("%s: /events/slug poll failed: %s", w.slug, e)
+                alt = None
+            if alt:
+                ptb = extract_price_to_beat(alt)
+                if ptb is None:
+                    w._ptb_fields = w._ptb_fields or price_like_fields(alt)
+        if ptb is None:
             return
         w.ptb_polymarket, w.ptb_seen_at = ptb, time.time()
         self.db.set_price_to_beat(w.slug, ptb, w.ptb_seen_at)
         if w.s0_status != "ok":
             w.s0_status = "ok"
             self.db.update_boundaries(w)
+
+    def _miss_detail(self, ts: float) -> str:
+        """Why no Chainlink report counted for boundary `ts`: the nearest reports around it."""
+        if self.chainlink is None:
+            return "Chainlink disabled"
+        h = self.chainlink.history
+        first = h.first()
+        if first is None:
+            return "no Chainlink reports received yet: joined late or feed down"
+        if first[0] > ts:
+            return f"joined late: first Chainlink report {first[0] - ts:+.1f}s after the boundary"
+        before, after = h.asof(ts), h.first_at_or_after(ts)
+        parts = [f"nearest reports {before[0] - ts:+.2f}s" if before else "no report before",
+                 f"{after[0] - ts:+.2f}s" if after else "none after yet"]
+        return f"{parts[0]} / {parts[1]} from the boundary; allowed delay {self.cfg.chainlink.boundary_max_delay_s:g}s"
 
     def _report_missing_ptb(self, w: MarketWindow) -> None:
         self._missing_ptb = getattr(self, "_missing_ptb", 0) + 1
@@ -468,6 +494,6 @@ class SeriesTracker:
             elif now > ts + late:
                 setattr(w, status_attr, "missed")
                 changed = True
-                log.warning("%s: %s boundary price missed (feed gap or joined late)", w.slug, which)
+                log.warning("%s: %s boundary price missed (%s)", w.slug, which, self._miss_detail(ts))
         if changed:
             self.db.update_boundaries(w)

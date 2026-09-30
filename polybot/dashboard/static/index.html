@@ -38,6 +38,7 @@ body {
 #hdr { display: flex; align-items: center; gap: 12px; padding: 0 12px; border-bottom: 1px solid var(--line); background: rgba(17, 14, 24, .85); min-width: 0; white-space: nowrap; }
 .brand { font-weight: 700; letter-spacing: .14em; font-size: 12px; }
 .brand b { color: var(--mag); font-weight: 700; }
+.brand .ver { color: var(--dim); font-weight: 400; letter-spacing: 0; font-size: 10px; margin-left: 6px; text-transform: none; }
 .badge { font-size: 9.5px; font-weight: 700; letter-spacing: .12em; padding: 2px 6px; border-radius: 2px; border: 1px solid; }
 .badge.paper { color: var(--mag); border-color: var(--mag); background: var(--mag-soft); }
 .badge.replay { color: #0b0911; background: var(--amber); border-color: var(--amber); font-size: 12px; padding: 3px 9px; }
@@ -157,7 +158,7 @@ body {
 <body>
 <div id="app">
   <header id="hdr">
-    <div class="brand">POLY<b>BOT</b></div>
+    <div class="brand">POLY<b>BOT</b><span class="ver" id="h-ver"></span></div>
     <span class="badge paper" title="Simulated fills only. This project cannot place orders.">PAPER</span>
     <span class="badge replay hidden" id="b-replay">REPLAY</span>
     <span class="badge test hidden" id="b-test" title="Endpoints are not Polymarket's production hosts">TEST</span>
@@ -387,6 +388,7 @@ function buildStatic() {
   const m = S.meta;
   $("b-replay").classList.toggle("hidden", m.source !== "replay");
   $("b-test").classList.toggle("hidden", !m.test_feed);
+  setText($("h-ver"), m.version ? "v" + m.version : "");
   $("b-test").title = "Endpoints point at " + m.endpoint_host + ", not Polymarket production";
   $("b-off").classList.toggle("hidden", !!m.trading);
   const feeds = $("h-feeds"); feeds.innerHTML = "";

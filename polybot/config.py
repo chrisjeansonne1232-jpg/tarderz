@@ -90,7 +90,7 @@ class ChainlinkConfig:
     stale_s: float = 30.0
     # Accept the first Chainlink tick at or after a window boundary only if it
     # is at most this late; otherwise the boundary price is "missed".
-    boundary_max_delay_s: float = 0.0
+    boundary_max_delay_s: float = 2.0
 
 
 @dataclass

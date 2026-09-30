@@ -36,7 +36,7 @@
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
         # config.toml: replace it if it is an unmodified copy of an earlier release,
         # keep it (and save the new defaults next to it) if you've edited it.
-        $shipped = @("2536e702e6aa5518fe4ee785793415a92f340ea19eba59f36ac53a2f110715ca", "423bddbe5dc5c398757ac3685e71b570387f52a1b59914445f767ea52b757d96", "28f8344f62acc3f04ab7c5e215df3427eb903fe880c5f93373f77fac3a659e74")
+        $shipped = @("2536e702e6aa5518fe4ee785793415a92f340ea19eba59f36ac53a2f110715ca", "423bddbe5dc5c398757ac3685e71b570387f52a1b59914445f767ea52b757d96", "28f8344f62acc3f04ab7c5e215df3427eb903fe880c5f93373f77fac3a659e74", "071340332ce3dd87563729c54784a1176743c9cc367fa17d75c36e55363fe788")
         $stampFile = Join-Path $dir ".config.shipped.sha256"
         if (Test-Path -LiteralPath $stampFile) { $shipped += (Get-Content -LiteralPath $stampFile -Raw).Trim().ToLower() }
         $newCfg = Join-Path $src.FullName "config.toml"
@@ -58,6 +58,11 @@
     } catch {
         Write-Host "Install failed: $($_.Exception.Message)" -ForegroundColor Red
         Write-Host "Download used: $url"
+        $installed = Join-Path $dir "start.ps1"
+        if ($env:POLYBOT_NO_START -or -not (Test-Path -LiteralPath $installed)) { return }
+        Write-Host "> starting the copy already installed instead" -ForegroundColor Magenta
+        $psExe = (Get-Process -Id $PID).Path
+        & $psExe -NoProfile -ExecutionPolicy Bypass -File $installed
         return
     } finally {
         Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
@@ -67,19 +72,29 @@
         try {
             $desktop = [Environment]::GetFolderPath("Desktop")
             $shell = New-Object -ComObject WScript.Shell
-            foreach ($pair in @(@("Polybot.lnk", "start.bat"), @("Polybot (iPad).lnk", "start-ipad.bat"))) {
+            # The shortcuts run update.ps1: fetch the latest version, then start (offline: start as is).
+            $psPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+            $upd = Join-Path $dir "update.ps1"
+            foreach ($pair in @(@("Polybot.lnk", ""), @("Polybot (iPad).lnk", " -Ipad"))) {
                 $lnk = $shell.CreateShortcut((Join-Path $desktop $pair[0]))
-                $lnk.TargetPath = Join-Path $dir $pair[1]
+                $lnk.TargetPath = $psPath
+                $lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$upd`"" + $pair[1]
                 $lnk.WorkingDirectory = $dir
                 $lnk.Save()
             }
-            Write-Host "> added 'Polybot' and 'Polybot (iPad)' shortcuts to your desktop" -ForegroundColor Magenta
+            Write-Host "> added 'Polybot' and 'Polybot (iPad)' shortcuts to your desktop (they update before starting)" -ForegroundColor Magenta
         } catch {
             Write-Host "(could not create desktop shortcuts: $($_.Exception.Message))"
         }
     }
 
-    Write-Host "> installed. Next time: double-click 'Polybot' on your desktop" -ForegroundColor Magenta
+    $ver = ""
+    $initPy = Join-Path $dir "polybot\__init__.py"
+    if (Test-Path -LiteralPath $initPy) {
+        $m = Select-String -LiteralPath $initPy -Pattern '__version__ = "([^"]+)"' | Select-Object -First 1
+        if ($m) { $ver = " v" + $m.Matches[0].Groups[1].Value }
+    }
+    Write-Host "> installed polybot$ver. Next time: double-click 'Polybot' on your desktop" -ForegroundColor Magenta
     if ($env:POLYBOT_NO_START) { return }  # for testing the installer alone
     # start.ps1 runs in a child PowerShell so script execution policy doesn't block it.
     $psExe = (Get-Process -Id $PID).Path

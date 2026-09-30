@@ -166,6 +166,12 @@ class FakeExchange:
             return web.json_response([self.gamma_event(info)] if info else [])
         return web.json_response([])
 
+    async def h_event_slug(self, req: web.Request) -> web.Response:
+        info = self.register(req.match_info["slug"])
+        if info is None:
+            raise web.HTTPNotFound()
+        return web.json_response(self.gamma_event(info))
+
     async def h_market(self, req: web.Request) -> web.Response:
         info = self.markets.get(req.match_info["id"])
         if info is None:
@@ -380,6 +386,7 @@ class FakeExchange:
     def app(self) -> web.Application:
         app = web.Application()
         app.router.add_get("/gamma/events", self.h_events)
+        app.router.add_get("/gamma/events/slug/{slug}", self.h_event_slug)
         app.router.add_get("/gamma/markets", self.h_markets)
         app.router.add_get("/gamma/markets/{id}", self.h_market)
         app.router.add_get("/clob/clob-markets/{cid}", self.h_clob_market)

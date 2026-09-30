@@ -315,8 +315,8 @@ def test_extract_price_to_beat_shapes():
     assert extract_price_to_beat(SAMPLE_EVENT) is None  # not published yet
 
 
-def test_boundary_requires_exact_timestamp_by_default():
-    feed = ChainlinkFeed(None, "ws://x", ChainlinkConfig(), history_s=3600)  # type: ignore[arg-type]
+def test_boundary_exact_mode_and_tolerance():
+    feed = ChainlinkFeed(None, "ws://x", ChainlinkConfig(boundary_max_delay_s=0), history_s=3600)  # type: ignore[arg-type]
     t0 = 1778584200
     feed.history.append(t0 - 1, 1.0)
     feed.history.append(t0 + 1, 2.0)  # first report is 1 s late: not the start price
@@ -327,6 +327,10 @@ def test_boundary_requires_exact_timestamp_by_default():
     lenient.history.append(t0 - 1, 1.0)
     lenient.history.append(t0 + 1, 2.0)
     assert lenient.boundary_price(t0) == (t0 + 1, 2.0)
+    too_late = ChainlinkFeed(None, "ws://x", ChainlinkConfig(), history_s=3600)  # type: ignore[arg-type]
+    too_late.history.append(t0 - 1, 1.0)
+    too_late.history.append(t0 + 2.5, 2.0)  # default tolerance is 2 s
+    assert too_late.boundary_price(t0) is None
 
 
 def test_database_migrates_old_markets_table(tmp_path):
@@ -363,3 +367,21 @@ def test_channel_group_merges_books_and_reports_stalest():
     assert "UP_B" not in g.books and g.last_data_recv == 100.0  # idle connections don't count
     # Subscriptions only ask for the optional event types when configured.
     assert "custom_feature_enabled" not in g.channel_for("a")._sub({"assets_ids": []})
+
+
+def test_boundary_miss_detail_names_nearest_reports():
+    from types import SimpleNamespace
+
+    from polybot.markets import SeriesTracker
+
+    t0 = 1778584200
+    feed = ChainlinkFeed(None, "ws://x", ChainlinkConfig(), history_s=3600)  # type: ignore[arg-type]
+    fake = SimpleNamespace(chainlink=feed, cfg=SimpleNamespace(chainlink=ChainlinkConfig()))
+    assert "no Chainlink reports" in SeriesTracker._miss_detail(fake, t0)
+    feed.history.append(t0 - 0.4, 1.0)
+    feed.history.append(t0 + 3.1, 2.0)
+    msg = SeriesTracker._miss_detail(fake, t0)
+    assert "-0.40s" in msg and "+3.10s" in msg and "allowed delay 2s" in msg
+    feed2 = ChainlinkFeed(None, "ws://x", ChainlinkConfig(), history_s=3600)  # type: ignore[arg-type]
+    feed2.history.append(t0 + 5, 1.0)
+    assert "joined late" in SeriesTracker._miss_detail(SimpleNamespace(chainlink=feed2, cfg=fake.cfg), t0)

@@ -37,7 +37,9 @@ This one line:
 2. Sets up the bot and checks the live markets.
 3. Starts paper trading and opens the dashboard in your browser.
 4. Adds **Polybot** and **Polybot (iPad)** shortcuts to your desktop for next
-   time.
+   time. The shortcuts fetch the latest version before starting; with no
+   internet they start the copy already installed. The version is shown next
+   to the logo on the dashboard.
 
 It also keeps the PC from sleeping while the bot runs. Keep the window open;
 Ctrl+C stops the bot. Paste the same line again to update; your settings and
@@ -149,7 +151,11 @@ stalls one feed to check the STALE handling.
 ```bash
 python -m polybot run               # add --dashboard for the web dashboard
 python -m polybot report            # stats from the database, any time
+python -m polybot windows           # recent windows: start/end price, offset, outcome
 ```
+
+On Windows run these from the install folder, using its Python:
+`cd $HOME\polybot; .venv\Scripts\python -m polybot windows`.
 
 `run` does everything `watch` does, plus the simulated strategy. It prints a
 one-line status every 60 s (bankroll, open positions, trades today, net P&L
@@ -369,9 +375,12 @@ first, then ~4 ticks/s), and that shutdown takes under 4 s.
 ## Known limitations / open questions
 
 - **Exact boundary tick.** Polymarket doesn't document exactly which
-  Chainlink report counts as "the price at the beginning/end". The bot only
-  accepts a report stamped exactly at the boundary (`boundary_max_delay_s =
-  0`). Two checks in `report` verify this against reality:
+  Chainlink report counts as "the price at the beginning/end". The bot uses
+  the first report stamped at or after the boundary, up to
+  `boundary_max_delay_s = 2` seconds late. (An exact-timestamp-only rule
+  looked too strict live: the outcome check stopped advancing under it.)
+  `python -m polybot windows` shows the offset used for each window, and two
+  checks in `report` verify the rule against reality:
   - the S0 check (our start price vs Polymarket's published price to beat)
   - the outcome check (our Chainlink start/end prices vs Polymarket's
     posted result)

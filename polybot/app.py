@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 import aiohttp
 
+from . import __version__
 from .book import OrderBook
 from .candles import CandleBuilder
 from .config import Config
@@ -89,10 +90,11 @@ class App:
     async def run(self) -> None:
         cfg = self.cfg
         self.db = Database(cfg.general.db_path)
-        self.db.log_event("INFO", "start", None, {"mode": self.mode})
+        self.db.log_event("INFO", "start", None, {"mode": self.mode, "version": __version__})
         self.log_counts = dict(self.db.conn.execute("SELECT tag, COUNT(*) FROM exec_log GROUP BY tag").fetchall())
         handler = _ExecLogHandler(self)
         logging.getLogger("polybot").addHandler(handler)
+        self.exec_log("MKT", f"polybot v{__version__} started ({self.mode} mode)")
         try:
             async with aiohttp.ClientSession(
                 trust_env=True, headers={"User-Agent": cfg.general.user_agent}

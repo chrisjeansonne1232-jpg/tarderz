@@ -9,6 +9,7 @@ from collections import deque
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
+from .. import __version__
 from ..fairvalue import annualize
 
 if TYPE_CHECKING:
@@ -77,6 +78,7 @@ class LiveSource:
         host = urlparse(cfg.endpoints.gamma).hostname or ""
         return {
             "source": self.source,
+            "version": __version__,
             "paper": True,
             "trading": self.app.engine is not None,
             "started_at": self.app.started_at,

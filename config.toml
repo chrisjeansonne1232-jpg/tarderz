@@ -57,7 +57,8 @@ topic = "crypto_prices_chainlink"
 symbol = "btc/usd"
 ping_interval_s = 5
 stale_s = 30
-boundary_max_delay_s = 0        # 0 = only a Chainlink report stamped exactly at the window start/end counts
+boundary_max_delay_s = 2        # start/end price = first Chainlink report at or up to this many s after the boundary
+                                # (0 = exact timestamp only; too strict: reports rarely land on the exact second)
 
 [polymarket_ws]
 ping_interval_s = 10            # docs: send PING every 10 s
