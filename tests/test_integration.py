@@ -2,14 +2,17 @@
 windows and forced websocket drops, then check what landed in SQLite."""
 
 import asyncio
+import csv
 import json
 import sqlite3
 import time
+from pathlib import Path
 
 import aiohttp
 import pytest
 
 from polybot.app import App
+from polybot.archive import run_archive
 from polybot.config import Config, SeriesConfig, validate
 from tests.fake_exchange import FakeExchange
 
@@ -41,6 +44,8 @@ def make_config(port: int, db_path: str, log_path: str) -> Config:
     cfg.sim.latency_ms = 100
     cfg.dashboard.dashboard_port = 0  # any free port
     cfg.markets.gamma_heartbeat_s = 1.0
+    cfg.archive.dir = str(Path(db_path).parent / "archive")
+    cfg.archive.interval_min = 0.1
     validate(cfg)
     return cfg
 
@@ -117,10 +122,15 @@ def test_end_to_end_against_fake_exchange(tmp_path, capsys):
     n, with_fv = db.execute("SELECT COUNT(*), COUNT(fair_up) FROM snapshots_1s").fetchone()
     assert n > 30 and with_fv > 10
     # Polymarket's published price to beat was picked up and agrees with our Chainlink start price.
+    # (A report up to boundary_max_delay_s late may differ slightly; one stamped
+    # exactly at the boundary must match.)
     ptb_rows = db.execute(
-        "SELECT s0_chainlink, ptb_polymarket FROM markets WHERE ptb_polymarket IS NOT NULL AND s0_chainlink IS NOT NULL"
+        "SELECT s0_chainlink, ptb_polymarket, s0_chainlink_ts - start_ts FROM markets "
+        "WHERE ptb_polymarket IS NOT NULL AND s0_chainlink IS NOT NULL"
     ).fetchall()
-    assert ptb_rows and all(abs(a - b) < 1e-6 for a, b in ptb_rows)
+    exact = [r for r in ptb_rows if abs(r[2]) < 1e-6]
+    assert exact and all(abs(a - b) < 1e-6 for a, b, _ in exact)
+    assert all(0 <= r[2] <= app.cfg.chainlink.boundary_max_delay_s for r in ptb_rows)
     assert db.execute("SELECT COUNT(*) FROM exec_log WHERE msg LIKE '%S0 check OK%'").fetchone()[0] >= 1
     tags = {r[0] for r in db.execute("SELECT DISTINCT tag FROM exec_log")}
     assert {"MKT", "RECONNECT", "SETTLE"} <= tags
@@ -129,5 +139,25 @@ def test_end_to_end_against_fake_exchange(tmp_path, capsys):
         "SELECT status, pnl, pnl_zero_fee, fee, payout, cost FROM trades WHERE status IN ('WON','LOST')"
     ):
         assert pnl == pytest.approx(payout - cost - fee) and pnl0 - pnl == pytest.approx(fee)
+    # Every evaluation was counted, and the archive was written while running.
+    counts = dict(db.execute("SELECT reason, SUM(n) FROM opportunity_counts GROUP BY reason").fetchall())
+    assert counts.get("checked", 0) > 50
+    assert counts["checked"] >= sum(counts.get(k, 0) for k in ("no_edge", "in_flight", "below_fee", "below_buffer",
+                                                                "too_late", "window_cap", "no_cash", "no_depth", "signal"))
+    n_trades = db.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+    assert counts.get("filled", 0) == n_trades
+    assert counts.get("signal", 0) >= counts.get("filled", 0) + counts.get("fill_skipped", 0)
+    arch = tmp_path / "archive"
+    days = [d for d in arch.iterdir() if d.is_dir()]
+    assert days and all((d / f).exists() for d in days for f in ("summary.txt", "trades.csv", "signals.csv",
+                                                                  "windows.csv", "log.csv"))
+    run_archive(str(tmp_path / "t.sqlite"), arch, app.cfg.dashboard.timezone, time.time())
+    with open(arch / "all_trades.csv", encoding="utf-8-sig") as f:
+        assert sum(1 for _ in csv.reader(f)) - 1 == db.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+    rows = []
+    for d in days:
+        with open(d / "windows.csv", encoding="utf-8-sig") as f:
+            rows += list(csv.DictReader(f))
+    assert rows and any(int(r["checked"]) > 0 for r in rows)
     # The Coinbase-Chainlink basis converges to the fake's true offset (+3.00).
     assert abs(app.basis.mean - 3.0) < 1.5

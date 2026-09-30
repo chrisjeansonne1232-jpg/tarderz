@@ -22,6 +22,7 @@ import json
 import logging
 import math
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -157,6 +158,9 @@ class PaperEngine:
         self._stats_cache: tuple[tuple, dict] | None = None
         self.signals_taken = 0
         self.skips_logged = 0
+        # Every evaluation, counted by outcome (not throttled like the skip log);
+        # flushed to the opportunity_counts table for the archive.
+        self._counts: Counter[tuple[str, str, str]] = Counter()
 
     # --- accounting -------------------------------------------------------------------
     @property
@@ -202,6 +206,12 @@ class PaperEngine:
         for sid in list(self.pending):
             self.db.update_signal(sid, decision="skipped", reason="shutdown before fill")
         self.pending.clear()
+        self.flush_counts()
+
+    def flush_counts(self) -> None:
+        if self._counts:
+            self.db.add_opportunity_counts(self._counts.items())
+            self._counts.clear()
 
     # --- signal evaluation ---------------------------------------------------------------
     def evaluate(self, now: float) -> None:
@@ -226,10 +236,14 @@ class PaperEngine:
         ask, ask_size = best
         fair = fv.p_up if side == "Up" else 1.0 - fv.p_up
         edge_gross = fair - ask
+        counts = self._counts
+        counts[(w.slug, side, "checked")] += 1
         if edge_gross <= 0:
+            counts[(w.slug, side, "no_edge")] += 1
             return  # ask is not below fair value: not an opportunity
         key = (w.slug, side)
         if key in self._inflight:
+            counts[(w.slug, side, "in_flight")] += 1
             return  # this opportunity already has an order on its way
         sim, st = self.cfg.sim, self.cfg.strategy
         fee = w.fee
@@ -265,20 +279,25 @@ class PaperEngine:
         reason = None
         if net_edge <= st.safety_buffer:
             if edge_gross <= fee_ask:
-                reason = f"edge {cents(edge_gross)} < fee {cents(fee_ask)}"
+                reason, rkey = f"edge {cents(edge_gross)} < fee {cents(fee_ask)}", "below_fee"
             else:
                 reason = (f"edge {cents(edge_after_fee)} after fee − slippage {cents(slippage)}"
                           f" ≤ buffer {cents(st.safety_buffer)}")
+                rkey = "below_buffer"
         elif tau < st.min_seconds_remaining:
-            reason = f"τ {tau:.0f}s < {st.min_seconds_remaining:.0f}s cutoff"
+            reason, rkey = f"τ {tau:.0f}s < {st.min_seconds_remaining:.0f}s cutoff", "too_late"
         elif budget < ask:
-            reason = ("window cap reached" if sim.max_window_usd - self.window_spent(w.slug) < ask
-                      else f"not enough cash (${self.cash():.2f})")
+            if sim.max_window_usd - self.window_spent(w.slug) < ask:
+                reason, rkey = "window cap reached", "window_cap"
+            else:
+                reason, rkey = f"not enough cash (${self.cash():.2f})", "no_cash"
         elif shares < max(w.min_order_size, 0.01):
             reason = (f"only {shares:g} sh fillable ≤ {ask + sim.max_slippage:.2f} (min {w.min_order_size:g})"
                       if shares else "displayed size already taken by our earlier paper fill")
+            rkey = "no_depth"
 
         if reason is not None:
+            counts[(w.slug, side, rkey)] += 1
             if now - self._last_skip.get(key, 0.0) >= st.skip_log_interval_s:
                 self._last_skip[key] = now
                 record.update(decision="skipped", reason=reason)
@@ -289,6 +308,7 @@ class PaperEngine:
             return
 
         # A real signal: reserve the cash and send the (paper) order.
+        counts[(w.slug, side, "signal")] += 1
         record.update(decision="pending", reason=None)
         sid = self.db.insert_signal(record)
         self.signals_taken += 1
@@ -325,6 +345,7 @@ class PaperEngine:
             self._inflight.discard(key)
 
     def _skip_fill(self, sid: int, sig: dict[str, Any], reason: str) -> None:
+        self._counts[(sig["slug"], sig["side"], "fill_skipped")] += 1
         self.db.update_signal(sid, decision="skipped", reason=reason)
         sig.update(decision="skipped", reason=reason)
         self.app.exec_log("SKIP", f"skip {sig['side'].upper()} {sig['series']}: {reason}", ref=f"sig:{sid}")
@@ -376,6 +397,7 @@ class PaperEngine:
         )
         t.id = self.db.insert_trade(t.to_row())
         self.trades.append(t)
+        self._counts[(w.slug, sig["side"], "filled")] += 1
         self.db.update_signal(sid, decision="filled", reason=None, trade_id=t.id)
         sig.update(decision="filled", reason=None, trade_id=t.id)
         for p, s, _ in fills:

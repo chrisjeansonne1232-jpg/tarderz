@@ -6,7 +6,7 @@ import json
 import sqlite3
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterable
 
 if TYPE_CHECKING:
     from .markets import MarketWindow
@@ -67,6 +67,14 @@ CREATE TABLE IF NOT EXISTS exec_log (
     id INTEGER PRIMARY KEY, ts REAL, tag TEXT, msg TEXT, ref TEXT
 );
 CREATE INDEX IF NOT EXISTS exec_log_ts ON exec_log(ts);
+
+-- How every evaluation of each window+side ended (full counts; the signals
+-- table only samples skips). reason: checked, no_edge, in_flight, below_fee,
+-- below_buffer, too_late, window_cap, no_cash, no_depth, signal, filled, fill_skipped.
+CREATE TABLE IF NOT EXISTS opportunity_counts (
+    slug TEXT, side TEXT, reason TEXT, n INTEGER,
+    PRIMARY KEY (slug, side, reason)
+);
 
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY, ts REAL, level TEXT, kind TEXT, slug TEXT, detail TEXT
@@ -230,6 +238,13 @@ class Database:
             f"SELECT {','.join(SIGNAL_COLS)} FROM signals WHERE ts >= ? AND ts < ? ORDER BY ts", (t0, t1)
         )
         return [dict(zip(SIGNAL_COLS, r)) for r in cur.fetchall()]
+
+    def add_opportunity_counts(self, items: Iterable[tuple[tuple[str, str, str], int]]) -> None:
+        self.conn.executemany(
+            "INSERT INTO opportunity_counts(slug, side, reason, n) VALUES (?,?,?,?) "
+            "ON CONFLICT(slug, side, reason) DO UPDATE SET n = n + excluded.n",
+            [(slug, side, reason, n) for (slug, side, reason), n in items],
+        )
 
     def insert_exec_log(self, ts: float, tag: str, msg: str, ref: str | None) -> None:
         self.conn.execute("INSERT INTO exec_log(ts, tag, msg, ref) VALUES (?,?,?,?)", (ts, tag, msg, ref))

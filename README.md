@@ -39,7 +39,8 @@ This one line:
 4. Adds **Polybot** and **Polybot (iPad)** shortcuts to your desktop for next
    time. The shortcuts fetch the latest version before starting; with no
    internet they start the copy already installed. The version is shown next
-   to the logo on the dashboard.
+   to the logo on the dashboard. A **Polybot archive** shortcut opens the
+   daily spreadsheets of every trade and skip (see [Archive](#archive)).
 
 It also keeps the PC from sleeping while the bot runs. Keep the window open;
 Ctrl+C stops the bot. Paste the same line again to update; your settings and
@@ -295,8 +296,12 @@ Everything goes to SQLite (`data/paperbot.sqlite`) and a rotating log
 - `markets`: every window seen, including full description, fee parameters
   and source, rules check, Chainlink/Coinbase start and end prices, our
   predicted outcome, and Polymarket's posted resolution.
-- `signals`: every evaluated opportunity, including fair value, ask, VWAP,
-  fee, edges, size, and decision (filled/skipped + reason).
+- `signals`: every signal and a sample of skipped opportunities (at most one
+  per window and side every `skip_log_interval_s`), including fair value,
+  ask, VWAP, fee, edges, size, and decision (filled/skipped + reason).
+- `opportunity_counts`: how *every* evaluation of each window and side ended
+  (ask ≥ fair, edge < fee, below buffer, too late, window cap, no cash, no
+  depth, signal, filled, missed at fill). Not sampled.
 - `trades`: every paper fill, including the levels it walked, fee, edge at
   entry, status (OPEN/PENDING/WON/LOST), and P&L with the zero-fee shadow.
 - `exec_log`: every execution-log line shown on the dashboard.
@@ -310,6 +315,33 @@ Everything goes to SQLite (`data/paperbot.sqlite`) and a rotating log
 ```bash
 sqlite3 data/paperbot.sqlite "SELECT slug, s0_chainlink, end_chainlink, chainlink_predicted, resolved_outcome FROM markets ORDER BY start_ts DESC LIMIT 20"
 ```
+
+## Archive
+
+While it runs, the bot writes a folder per day (in `dashboard.timezone`) to
+`data/archive/`. It refreshes today and yesterday every 15 minutes and fills
+in missing days at startup. The files are CSV, so they open in Excel:
+
+| file | contents |
+|---|---|
+| `summary.txt` | the day's trades and P&L (net and zero-fee); results **by entry price** vs what the model predicted; why opportunities were skipped (full counts) |
+| `trades.csv` | every trade entered that day: prices, fee, fair value, edge, status, outcome, P&L |
+| `signals.csv` | every signal and the sampled skips, with all model inputs and the skip reason |
+| `windows.csv` | one row per market window: start/end prices and offsets, outcome check, evaluation counts, trades, P&L |
+| `log.csv` | the execution log |
+
+`all_trades.csv` in the archive root has every trade ever made, and
+`README.txt` explains every column. The archive is rebuilt from SQLite, so
+deleting it loses nothing. To refresh it by hand:
+
+```bash
+python -m polybot archive            # today, yesterday, and any missing day
+python -m polybot archive --all      # rewrite every day
+```
+
+If a file is open in Excel, Windows won't let the bot replace it. The bot
+keeps the old copy and shows a warning; close the file and it updates on the
+next refresh.
 
 ## Running it for several days
 

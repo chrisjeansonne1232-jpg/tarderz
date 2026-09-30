@@ -160,6 +160,13 @@ class RecorderConfig:
 
 
 @dataclass
+class ArchiveConfig:
+    enabled: bool = True
+    dir: str = "data/archive"  # one folder per day of CSV files (open in Excel)
+    interval_min: float = 15.0  # refresh today's (and yesterday's) files this often
+
+
+@dataclass
 class DashboardConfig:
     dashboard_host: str = "127.0.0.1"  # 0.0.0.0 to view from other devices on your LAN
     dashboard_port: int = 8787
@@ -190,6 +197,7 @@ class Config:
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     sim: SimConfig = field(default_factory=SimConfig)
     recorder: RecorderConfig = field(default_factory=RecorderConfig)
+    archive: ArchiveConfig = field(default_factory=ArchiveConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     watch: WatchConfig = field(default_factory=WatchConfig)
 
@@ -259,6 +267,8 @@ def validate(cfg: Config) -> None:
         raise ConfigError("sim.starting_bankroll, max_trade_usd and max_window_usd must be > 0")
     if cfg.sim.latency_ms < 0 or cfg.sim.max_slippage < 0:
         raise ConfigError("sim.latency_ms and sim.max_slippage must be >= 0")
+    if cfg.archive.interval_min <= 0 or not cfg.archive.dir:
+        raise ConfigError("archive.interval_min must be > 0 and archive.dir non-empty")
     if cfg.recorder.interval_s <= 0 or cfg.dashboard.tick_hz <= 0:
         raise ConfigError("recorder.interval_s and dashboard.tick_hz must be > 0")
     if not any(s.name == cfg.dashboard.primary_series for s in enabled):

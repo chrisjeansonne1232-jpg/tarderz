@@ -3,6 +3,9 @@
 db_path = "data/fake.sqlite"
 log_file = "data/fake.log"
 
+[archive]
+dir = "data/fake-archive"
+
 [endpoints]
 gamma = "http://127.0.0.1:8765/gamma"
 clob = "http://127.0.0.1:8765/clob"

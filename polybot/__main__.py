@@ -133,6 +133,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("report", help="print paper-trading performance from the database")
     p_win = sub.add_parser("windows", help="list recent market windows: start/end prices, how they were captured, outcome")
     p_win.add_argument("-n", type=int, default=20, help="how many windows (default 20)")
+    p_arc = sub.add_parser("archive", help="write the daily CSV archive now (the bot also does this every 15 min)")
+    p_arc.add_argument("--day", help="only this day, YYYY-MM-DD (in dashboard.timezone)")
+    p_arc.add_argument("--all", action="store_true", help="rewrite every day, not just today, yesterday and missing days")
     args = ap.parse_args(argv)
     try:
         cfg = load_config(args.config)
@@ -147,6 +150,8 @@ def main(argv: list[str] | None = None) -> int:
         return report(cfg)
     if args.cmd == "windows":
         return windows(cfg, args.n)
+    if args.cmd == "archive":
+        return archive(cfg, args.day, args.all)
     if getattr(args, "host", None):
         cfg.dashboard.dashboard_host = args.host
     if getattr(args, "port", None):
@@ -185,6 +190,33 @@ def report(cfg: Config) -> int:
     else:
         print(f"  S0 check               {s0['matched']}/{s0['compared']} windows within $0.50 of Polymarket's price to beat"
               + (f" (median gap ${s0['median_abs_diff']:.2f}, max ${s0['max_abs_diff']:.2f})" if s0["compared"] else ""))
+    return 0
+
+
+def archive(cfg: Config, day: str | None, all_days: bool) -> int:
+    from datetime import date
+
+    from .archive import run_archive
+
+    if not Path(cfg.general.db_path).exists():
+        print(f"no database at {cfg.general.db_path}; run `python -m polybot run` first", file=sys.stderr)
+        return 1
+    only = None
+    if day:
+        try:
+            only = date.fromisoformat(day)
+        except ValueError:
+            print(f"--day must look like 2026-09-30, got {day!r}", file=sys.stderr)
+            return 2
+    res = run_archive(cfg.general.db_path, cfg.archive.dir, cfg.dashboard.timezone, time.time(),
+                      cfg.archive.interval_min, all_days=all_days, only=only)
+    root = Path(cfg.archive.dir).resolve()
+    print(f"archive: {root}")
+    print(f"  wrote {len(res.days)} day(s): {', '.join(res.days) or 'none (no data yet)'}")
+    for path in res.locked:
+        print(f"  NOT updated (open in another program, e.g. Excel): {path}")
+    if res.days:
+        print(f"  start with {root / res.days[-1] / 'summary.txt'}")
     return 0
 
 

@@ -36,7 +36,7 @@
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
         # config.toml: replace it if it is an unmodified copy of an earlier release,
         # keep it (and save the new defaults next to it) if you've edited it.
-        $shipped = @("2536e702e6aa5518fe4ee785793415a92f340ea19eba59f36ac53a2f110715ca", "423bddbe5dc5c398757ac3685e71b570387f52a1b59914445f767ea52b757d96", "28f8344f62acc3f04ab7c5e215df3427eb903fe880c5f93373f77fac3a659e74", "071340332ce3dd87563729c54784a1176743c9cc367fa17d75c36e55363fe788")
+        $shipped = @("2536e702e6aa5518fe4ee785793415a92f340ea19eba59f36ac53a2f110715ca", "423bddbe5dc5c398757ac3685e71b570387f52a1b59914445f767ea52b757d96", "28f8344f62acc3f04ab7c5e215df3427eb903fe880c5f93373f77fac3a659e74", "071340332ce3dd87563729c54784a1176743c9cc367fa17d75c36e55363fe788", "78ed7a464ce53ee4f5a82e73fb2d04780570d51f9c705ccf14fd395e781069a8")
         $stampFile = Join-Path $dir ".config.shipped.sha256"
         if (Test-Path -LiteralPath $stampFile) { $shipped += (Get-Content -LiteralPath $stampFile -Raw).Trim().ToLower() }
         $newCfg = Join-Path $src.FullName "config.toml"
@@ -82,7 +82,13 @@
                 $lnk.WorkingDirectory = $dir
                 $lnk.Save()
             }
-            Write-Host "> added 'Polybot' and 'Polybot (iPad)' shortcuts to your desktop (they update before starting)" -ForegroundColor Magenta
+            # A shortcut to the daily archive (every trade, signal and skip as spreadsheet files).
+            $archiveDir = Join-Path $dir "data\archive"
+            New-Item -ItemType Directory -Force -Path $archiveDir | Out-Null
+            $lnk = $shell.CreateShortcut((Join-Path $desktop "Polybot archive.lnk"))
+            $lnk.TargetPath = $archiveDir
+            $lnk.Save()
+            Write-Host "> added 'Polybot', 'Polybot (iPad)' and 'Polybot archive' shortcuts to your desktop" -ForegroundColor Magenta
         } catch {
             Write-Host "(could not create desktop shortcuts: $($_.Exception.Message))"
         }

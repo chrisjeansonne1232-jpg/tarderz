@@ -15,6 +15,7 @@ from typing import Any, Callable
 import aiohttp
 
 from . import __version__
+from .archive import run_archive
 from .book import OrderBook
 from .candles import CandleBuilder
 from .config import Config
@@ -167,6 +168,8 @@ class App:
             "recorder": self._recorder(),
             "loop_lag": self._loop_lag(),
         }
+        if self.cfg.archive.enabled:
+            coros["archiver"] = self._archiver()
         if self.chainlink is not None:
             coros["chainlink"] = self.chainlink.run(self.stop)
         if self.cfg.markets.gamma_heartbeat_s > 0:
@@ -366,18 +369,45 @@ class App:
             await sleep_or_stop(self.stop, next_t - time.time())
 
     async def _maintenance(self) -> None:
-        last_status = time.time()
+        last_status = last_flush = time.time()
         while not self.stop.is_set():
             await self.channel.maintain()
             now = time.time()
             if self.engine is not None:
                 self.engine.maintain(now)
+                if now - last_flush >= 30.0:
+                    last_flush = now
+                    self.engine.flush_counts()
                 if now - last_status >= self.cfg.sim.status_interval_s:
                     last_status = now
                     line = self.engine.status_line(now)
                     print(f"{fmt_hms(now)}Z  {line}", flush=True)
                     log.info("status: %s", line)
             await sleep_or_stop(self.stop, 1.0)
+
+    async def _archiver(self) -> None:
+        """Refresh the daily CSV archive (in a worker thread, off the event loop)."""
+        cfg = self.cfg
+        warned: set[str] = set()
+        if await sleep_or_stop(self.stop, 20.0):  # let startup settle first
+            return
+        while not self.stop.is_set():
+            if self.engine is not None:
+                self.engine.flush_counts()
+            try:
+                res = await asyncio.to_thread(
+                    run_archive, cfg.general.db_path, cfg.archive.dir, cfg.dashboard.timezone, time.time(),
+                    cfg.archive.interval_min,
+                )
+                log.info("archive refreshed: %s", ", ".join(res.days) or "nothing yet")
+                for path in res.locked:
+                    if path not in warned:
+                        warned.add(path)
+                        log.warning("archive: %s is open in another program; close it so it can update", path)
+            except Exception as e:  # noqa: BLE001 - the archive must never take the bot down
+                log.warning("archive refresh failed: %r", e)
+            if await sleep_or_stop(self.stop, cfg.archive.interval_min * 60.0):
+                return
 
     async def _gamma_heartbeat(self) -> None:
         """Poll the live market's Gamma record so the Gamma status reflects reality."""

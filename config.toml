@@ -108,6 +108,13 @@ status_interval_s = 60          # one-line status in `run` mode
 interval_s = 1.0                # spot + order-book snapshot for replay
 depth = 5                       # book levels per side stored
 
+[archive]
+# A folder per day with every trade, signal and skip as spreadsheet (CSV) files,
+# plus a per-window table and a summary. Rebuilt from the database; safe to delete.
+enabled = true
+dir = "data/archive"
+interval_min = 15               # refresh today's and yesterday's files this often (and at startup)
+
 [dashboard]
 dashboard_host = "127.0.0.1"    # "0.0.0.0" to open it from an iPad on the same wifi
 dashboard_port = 8787
