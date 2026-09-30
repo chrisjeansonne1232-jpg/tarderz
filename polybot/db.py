@@ -251,9 +251,66 @@ class Database:
         return rows
 
     def wallets(self) -> list[str]:
+        """The current run's wallets: "main" and the what-if wallets."""
         if "wallet" not in self._cols("trades"):
             return ["main"]
-        return [r[0] for r in self.conn.execute("SELECT DISTINCT COALESCE(wallet, 'main') FROM trades ORDER BY 1")]
+        return [r[0] for r in self.conn.execute(
+            "SELECT DISTINCT COALESCE(wallet, 'main') AS w FROM trades "
+            "WHERE wallet IS NULL OR wallet = 'main' OR wallet LIKE 'whatif-%' ORDER BY 1")]
+
+    def meta_get(self, key: str) -> str | None:
+        row = self.conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def meta_set(self, key: str, value: Any) -> None:
+        self.conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (key, str(value)))
+
+    def start_run(self, run: int, bankroll: float, now: float) -> dict[str, Any] | None:
+        """Make `run` the current run. If the database holds trades from a
+        different run, keep them under that run's name ("run<N>", what-if
+        wallets as "run<N>/whatif-...") so the wallets start empty. Returns a
+        summary of the archived run, or None if nothing changed."""
+        cur = self.meta_get("current_run")
+        old = int(cur) if cur is not None else 1  # databases from before runs existed hold run 1
+        if old == run:
+            if cur is None:
+                self.meta_set("current_run", run)
+                self.conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES (?, ?)", (f"run{run}:bankroll", str(bankroll)))
+                self.conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES (?, ?)", (f"run{run}:started", repr(now)))
+            return None
+        n, net, zero = self.conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(pnl), 0), COALESCE(SUM(pnl_zero_fee), 0) FROM trades "
+            "WHERE COALESCE(wallet, 'main') = 'main'"
+        ).fetchone()
+        n_whatif = self.conn.execute("SELECT COUNT(*) FROM trades WHERE wallet LIKE 'whatif-%'").fetchone()[0]
+        if n == 0 and n_whatif == 0:  # nothing to keep (e.g. a new install): just record the run
+            self.meta_set("current_run", run)
+            self.meta_set(f"run{run}:bankroll", bankroll)
+            self.meta_set(f"run{run}:started", repr(now))
+            return None
+        name = f"run{old}"
+        self.conn.execute("BEGIN")
+        try:
+            self.conn.execute("UPDATE trades SET wallet = ? WHERE COALESCE(wallet, 'main') = 'main'", (name,))
+            self.conn.execute("UPDATE trades SET wallet = ? || '/' || wallet WHERE wallet LIKE 'whatif-%'", (name,))
+            self.conn.execute("DELETE FROM meta WHERE key LIKE 'wallet_since:%'")
+            self.meta_set(f"{name}:ended", repr(now))
+            self.meta_set("current_run", run)
+            self.meta_set(f"run{run}:bankroll", bankroll)
+            self.meta_set(f"run{run}:started", repr(now))
+            self.conn.execute("COMMIT")
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
+        return {"archived": name, "trades": n, "net_pnl": net, "zero_fee_pnl": zero,
+                "bankroll": self.meta_get(f"{name}:bankroll")}
+
+    def past_runs(self) -> list[str]:
+        if "wallet" not in self._cols("trades"):
+            return []
+        names = [r[0] for r in self.conn.execute(
+            "SELECT DISTINCT wallet FROM trades WHERE wallet LIKE 'run%' AND wallet NOT LIKE '%/%'")]
+        return sorted(names, key=lambda n: int("".join(c for c in n if c.isdigit()) or 0))
 
     def wallet_since(self, wallet: str, now: float | None = None) -> float | None:
         """When a what-if wallet first ran (recorded once, on first start)."""

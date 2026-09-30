@@ -55,6 +55,8 @@ from data/paperbot.sqlite, so the archive can be deleted safely.
 To refresh it by hand:  python -m polybot archive
 
 all_trades.csv   every paper trade ever made by the main wallet (same columns as trades.csv)
+past_runs/       trades of earlier runs (a run = one test from a fresh bankroll; see [sim] run
+                 in config.toml). The day folders and all_trades.csv cover the current run.
 whatif_trades.csv  trades of the latency what-if wallets ("whatif-0ms" etc.): the same
                  rules as the main wallet, orders filled after a different delay, each
                  with its own bankroll. Compare them with `python -m polybot report`.
@@ -152,7 +154,7 @@ def _wallet_sql(conn: sqlite3.Connection, table: str, main: bool) -> str:
     has = any(r[1] == "wallet" for r in conn.execute(f"PRAGMA table_info({table})"))
     if not has:  # database from before v0.4: everything is the main wallet
         return "1=1" if main else "0=1"
-    return "COALESCE(wallet, 'main') = 'main'" if main else "COALESCE(wallet, 'main') != 'main'"
+    return "COALESCE(wallet, 'main') = 'main'" if main else "wallet LIKE 'whatif-%'"
 
 
 def _write_csv(path: Path, header: list[str], rows: list[list[Any]], result: ArchiveResult) -> None:
@@ -417,9 +419,17 @@ def run_archive(db_path: str, root: str | Path, tzname: str, now: float, interva
     try:
         all_trades = conn.execute(f"SELECT * FROM trades WHERE {_wallet_sql(conn, 'trades', True)} ORDER BY id").fetchall()
         whatif = conn.execute(f"SELECT * FROM trades WHERE {_wallet_sql(conn, 'trades', False)} ORDER BY wallet, id").fetchall()
+        has_wallet = _wallet_sql(conn, "trades", False) != "0=1"
+        past = conn.execute("SELECT * FROM trades WHERE wallet LIKE 'run%' ORDER BY wallet, id").fetchall() if has_wallet else []
     finally:
         conn.close()
     _write_csv(root / "all_trades.csv", TRADE_HEADER, _trade_rows(all_trades, tz), result)
+    if past:
+        (root / "past_runs").mkdir(exist_ok=True)
+        for name in sorted({t["wallet"].split("/")[0] for t in past}):
+            rows = [t for t in past if t["wallet"].split("/")[0] == name]
+            _write_csv(root / "past_runs" / f"{name}_trades.csv", ["wallet", *TRADE_HEADER],
+                       [[t["wallet"], *row] for t, row in zip(rows, _trade_rows(rows, tz))], result)
     if whatif:
         _write_csv(root / "whatif_trades.csv", ["wallet", *TRADE_HEADER],
                    [[t["wallet"], *row] for t, row in zip(whatif, _trade_rows(whatif, tz))], result)

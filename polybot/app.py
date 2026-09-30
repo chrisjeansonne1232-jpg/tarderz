@@ -20,6 +20,7 @@ from .book import OrderBook
 from .candles import CandleBuilder
 from .config import Config
 from .db import Database
+from .engine import PaperEngine, settle_past_runs
 from .fairvalue import BasisEstimator, VolEstimator, annualize, fair_up_probability
 from .feeds import ChainlinkFeed, CoinbaseFeed, OracleTick, SpotTick
 from .market_ws import ChannelGroup
@@ -146,10 +147,22 @@ class App:
             if s.enabled
         ]
         if self.mode == "run":
-            from .engine import PaperEngine
+            switched = self.db.start_run(cfg.sim.run, cfg.sim.starting_bankroll, time.time())
+            if switched:
+                self.exec_log(
+                    "MKT",
+                    f"new paper run {cfg.sim.run} starts at ${cfg.sim.starting_bankroll:,.2f} · previous run kept as "
+                    f"{switched['archived']}: {switched['trades']} trades, net {switched['net_pnl']:+.2f} "
+                    f"(zero-fee {switched['zero_fee_pnl']:+.2f}) · what-if wallets restart too",
+                )
 
             self.engine = PaperEngine(self)
             self.engine.reconcile_on_start()
+            for slug, outcome in self.db.conn.execute(
+                "SELECT m.slug, m.resolved_outcome FROM markets m WHERE m.resolved_outcome IS NOT NULL AND EXISTS "
+                "(SELECT 1 FROM trades t WHERE t.slug = m.slug AND t.wallet LIKE 'run%' AND t.status IN ('OPEN','PENDING'))"
+            ).fetchall():
+                settle_past_runs(self.db, slug, outcome, time.time())
             if cfg.whatif.enabled:
                 now = time.time()
                 for ms in cfg.whatif.latencies_ms:
@@ -338,6 +351,8 @@ class App:
         self.exec_log("SETTLE", f"{slug} resolved {outcome.upper()} (Gamma) · Chainlink predicted {(predicted or 'n/a').upper()}")
         for eng in self.engines:
             eng.settle(slug, outcome)
+        if self.engine is not None:
+            settle_past_runs(self.db, slug, outcome, time.time())
 
     # --- model ----------------------------------------------------------------
     def fair_value(self, w: MarketWindow, now: float) -> tuple[FairValue | None, str]:

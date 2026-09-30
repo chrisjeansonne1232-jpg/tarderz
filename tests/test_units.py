@@ -420,3 +420,44 @@ def test_by_window_groups_trades_of_the_same_market():
     m, ci = mean_ci([10.0, -2.0, 1.0])
     assert ci is not None and ci[0] < m < ci[1] and bw["ci95"] == pytest.approx(ci)
     assert mean_ci([]) == (None, None) and mean_ci([1.0]) == (1.0, None)
+
+
+def test_new_run_keeps_old_trades_and_starts_empty(tmp_path):
+    from polybot.db import Database
+
+    db = Database(str(tmp_path / "r.sqlite"))
+    db.conn.execute("INSERT INTO trades(id, slug, status, pnl, pnl_zero_fee, fee) VALUES (1, 'a', 'LOST', -10, -9.5, 0.5)")
+    db.conn.execute("INSERT INTO trades(id, slug, status, wallet) VALUES (2, 'a', 'WON', 'whatif-0ms')")
+    db.wallet_since("whatif-0ms", 5.0)
+    assert db.start_run(1, 100.0, 10.0) is None  # same run: nothing moves
+    assert [r["id"] for r in db.all_trades()] == [1]
+    info = db.start_run(2, 1000.0, 20.0)
+    assert info and info["archived"] == "run1" and info["trades"] == 1 and info["net_pnl"] == -10
+    assert db.all_trades() == [] and db.all_trades("whatif-0ms") == []
+    assert [r["id"] for r in db.all_trades("run1")] == [1] and [r["id"] for r in db.all_trades("run1/whatif-0ms")] == [2]
+    assert db.past_runs() == ["run1"] and db.wallets() == []
+    assert db.wallet_since("whatif-0ms") is None  # what-if wallets restart with the run
+    assert db.start_run(2, 1000.0, 30.0) is None and db.meta_get("current_run") == "2"
+    fresh = Database(str(tmp_path / "f.sqlite"))
+    assert fresh.start_run(2, 1000.0, 1.0) is None and fresh.meta_get("current_run") == "2"
+
+
+def test_past_run_trades_settle_when_their_market_resolves(tmp_path):
+    import json as _json
+
+    from polybot.db import Database
+    from polybot.engine import settle_past_runs
+
+    db = Database(str(tmp_path / "p.sqlite"))
+    base = dict(signal_id=0, series="s", token="t", ts_signal=0, ts_fill=0, latency_ms=300, shares=10.0,
+                shares_held=10.0, avg_price=0.4, signal_ask=0.4, signal_vwap=0.4, cost=4.0, fee=0.168,
+                fee_in="collateral", fair_signal=0.5, fair_fill=0.5, edge_entry=0.08, levels=_json.dumps([]),
+                status="PENDING", window_end=0)
+    db.insert_trade(dict(base, slug="m", side="Up", wallet="run1"))
+    db.insert_trade(dict(base, slug="m", side="Down", wallet="run1/whatif-0ms"))
+    db.insert_trade(dict(base, slug="m", side="Up", wallet="main"))  # the live engine settles its own
+    assert settle_past_runs(db, "m", "Up", 5.0) == 2
+    rows = {w: (st, round(p, 3)) for w, st, p in db.conn.execute("SELECT wallet, status, pnl FROM trades")
+            if st != "PENDING"}
+    assert rows == {"run1": ("WON", round(10 - 4.168, 3)), "run1/whatif-0ms": ("LOST", -4.168)}
+    assert db.conn.execute("SELECT status FROM trades WHERE wallet='main'").fetchone()[0] == "PENDING"

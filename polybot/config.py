@@ -140,7 +140,12 @@ class StrategyConfig:
 
 @dataclass
 class SimConfig:
-    starting_bankroll: float = 100.0
+    # A "run" is one paper test from a fresh bankroll. Raise `run` to start
+    # over: at the next start the current trades are kept as a past run
+    # ("run<N>", still in `report` and the archive) and the wallet begins
+    # again at starting_bankroll. The what-if wallets restart with it.
+    run: int = 1
+    starting_bankroll: float = 1000.0
     latency_ms: float = 300.0  # signal -> fill delay; fill uses the book as it is after the delay
     adverse_move: str = "take"  # book moved against us during latency: "take" the worse price or "skip"
     max_slippage: float = 0.02  # never pay more than signal ask + this per share (the order's limit)
@@ -275,6 +280,8 @@ def validate(cfg: Config) -> None:
         raise ConfigError("model.vol_sample_s and model.vol_lookback_min must be > 0")
     _choice(cfg.sim.adverse_move, ("take", "skip"), "sim.adverse_move")
     _choice(cfg.sim.order_type, ("FAK", "FOK"), "sim.order_type")
+    if cfg.sim.run < 1:
+        raise ConfigError("sim.run must be >= 1")
     if cfg.sim.starting_bankroll <= 0 or cfg.sim.max_trade_usd <= 0 or cfg.sim.max_window_usd <= 0:
         raise ConfigError("sim.starting_bankroll, max_trade_usd and max_window_usd must be > 0")
     if cfg.sim.latency_ms < 0 or cfg.sim.max_slippage < 0:

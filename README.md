@@ -316,6 +316,16 @@ Everything goes to SQLite (`data/paperbot.sqlite`) and a rotating log
 sqlite3 data/paperbot.sqlite "SELECT slug, s0_chainlink, end_chainlink, chainlink_predicted, resolved_outcome FROM markets ORDER BY start_ts DESC LIMIT 20"
 ```
 
+## Runs (starting over)
+
+A run is one paper test from a fresh bankroll. To start over, raise `run` in
+`[sim]` (and change `starting_bankroll` if you like). At the next start the
+bot keeps the previous run's trades under its name (`run1`, what-if wallets
+as `run1/whatif-0ms` …), and every wallet begins again empty. Past runs stay
+in `report` (PAST RUNS) and in `data/archive/past_runs/`. Trades that were
+still open at the switch are settled when their markets resolve. Run 1 was
+the original $100 test; run 2 starts at $1,000.
+
 ## Latency what-if
 
 "Would a faster connection make this profitable?" The bot runs extra paper

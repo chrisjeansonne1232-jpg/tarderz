@@ -175,6 +175,9 @@ def report(cfg: Config) -> int:
     try:
         trades = db.all_trades()
         whatif = {w: db.all_trades(w) for w in db.wallets() if w != "main"}
+        run = db.meta_get("current_run")
+        run_started = db.meta_get(f"run{run}:started") if run else None
+        past = [(name, db.all_trades(name)) for name in db.past_runs()]
         since = {w: db.wallet_since(w) for w in whatif}
         agree, total = db.oracle_check()
         try:
@@ -183,6 +186,9 @@ def report(cfg: Config) -> int:
             s0 = None
     finally:
         db.close()
+    if run:
+        when = fmt_local(float(run_started), cfg.dashboard.timezone) if run_started else "?"
+        print(f"CURRENT RUN {run}  (started {when}, ${cfg.sim.starting_bankroll:,.2f} bankroll)")
     print(format_report(summarize(trades, cfg.sim.starting_bankroll, cfg.dashboard.timezone, time.time())))
     if whatif:
         print()
@@ -198,6 +204,14 @@ def report(cfg: Config) -> int:
         rows.append({"label": f"main wallet ({cfg.sim.latency_ms:g}ms)",
                      "stats": summarize(main, cfg.sim.starting_bankroll, cfg.dashboard.timezone, now)})
         print(format_whatif(rows, common, cfg.dashboard.timezone))
+    if past:
+        print()
+        print("PAST RUNS  (kept for reference; not part of the numbers above)")
+        for name, ts in past:
+            settled = [t for t in ts if t["status"] in ("WON", "LOST")]
+            wins = sum(1 for t in settled if t["status"] == "WON")
+            print(f"  {name:<8} {len(ts):>5} trades  won {wins}/{len(settled)}  net {sum(t['pnl'] or 0 for t in settled):+.2f}"
+                  f"  zero-fee {sum(t['pnl_zero_fee'] or 0 for t in settled):+.2f}  fees {sum(t['fee'] or 0 for t in ts):.2f}")
     print()
     print("DATA CHECKS")
     print(f"  outcome check          {agree}/{total} windows: our Chainlink start/end prices predicted Polymarket's result")
@@ -234,6 +248,13 @@ def archive(cfg: Config, day: str | None, all_days: bool) -> int:
     if res.days:
         print(f"  start with {root / res.days[-1] / 'summary.txt'}")
     return 0
+
+
+def fmt_local(ts: float, tz: str) -> str:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    return datetime.fromtimestamp(ts, ZoneInfo(tz)).strftime("%Y-%m-%d %H:%M")
 
 
 def _offset(obs_ts: float | None, boundary: float | None) -> str:

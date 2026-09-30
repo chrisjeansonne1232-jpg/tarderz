@@ -491,7 +491,7 @@ function renderWallet() {
   const bal = st ? st.bankroll : m.starting_bankroll;
   setNum($("w-bal"), bal, "$" + price(bal));
   const ch = st ? st.bankroll_pct : 0;
-  const chEl = $("w-chg"); chEl.innerHTML = `<span class="${pnlClass(ch)}">${pct(ch, 2, true)}</span> <span class="mut">since start · $${price(m.starting_bankroll)}</span>`;
+  const chEl = $("w-chg"); chEl.innerHTML = `<span class="${pnlClass(ch)}">${pct(ch, 2, true)}</span> <span class="mut">run ${m.run || 1} · from $${price(m.starting_bankroll, 0)}</span>`;
   if (st) {
     $("w-pl").innerHTML = `net <b class="${pnlClass(st.net_pnl)}">${usd(st.net_pnl, true)}</b> · <span title="same trades, no fees">zero-fee ${usd(st.zero_fee_pnl, true)}</span>`;
     $("w-trades").innerHTML = `${st.trades}` + (st.open_count ? `<span class="sub"> ${st.open_count} open</span>` : "");

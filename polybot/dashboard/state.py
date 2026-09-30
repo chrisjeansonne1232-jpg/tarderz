@@ -90,6 +90,7 @@ class LiveSource:
             "slippage_allowance": cfg.strategy.slippage_allowance,
             "min_seconds_remaining": cfg.strategy.min_seconds_remaining,
             "starting_bankroll": cfg.sim.starting_bankroll,
+            "run": cfg.sim.run,
             "max_trade_usd": cfg.sim.max_trade_usd,
             "max_window_usd": cfg.sim.max_window_usd,
             "adverse_move": cfg.sim.adverse_move,

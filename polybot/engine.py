@@ -97,6 +97,21 @@ class Trade:
         d["levels"] = json.dumps(self.levels)
         return d
 
+    def settle(self, outcome: str, now: float) -> bool:
+        """Settle at Polymarket's posted outcome; returns True if this trade won."""
+        won = self.side == outcome
+        self.outcome = outcome
+        self.payout = self.shares_held if won else 0.0
+        self.pnl = self.payout - self.cash_out
+        self.pnl_zero_fee = (self.shares if won else 0.0) - self.cost
+        self.status = "WON" if won else "LOST"
+        self.settled_ts = now
+        return won
+
+    def settled_fields(self) -> dict[str, Any]:
+        return {"status": self.status, "outcome": self.outcome, "payout": self.payout, "pnl": self.pnl,
+                "pnl_zero_fee": self.pnl_zero_fee, "settled_ts": self.settled_ts}
+
     def public(self) -> dict[str, Any]:
         d = asdict(self)
         d.pop("token", None)
@@ -135,6 +150,22 @@ def walk_asks(
         spent += take * price + (f if fee_in_collateral else 0.0)
         remaining -= take
     return fills
+
+
+def settle_past_runs(db: Any, slug: str, outcome: str, now: float) -> int:
+    """Settle trades of earlier runs that were still open when a new run
+    started, so a past run's record ends up complete."""
+    from .db import TRADE_COLS
+
+    rows = db.conn.execute(
+        f"SELECT {','.join(TRADE_COLS)} FROM trades WHERE slug = ? AND wallet LIKE 'run%' "
+        "AND status IN ('OPEN', 'PENDING')", (slug,),
+    ).fetchall()
+    for r in rows:
+        t = Trade.from_row(dict(zip(TRADE_COLS, r)))
+        t.settle(outcome, now)
+        db.update_trade(t.id, **t.settled_fields())
+    return len(rows)
 
 
 class _NullCounter(dict):
@@ -459,17 +490,8 @@ class PaperEngine:
         for t in self.trades:
             if t.slug != slug or t.status not in OPEN_STATES:
                 continue
-            won = t.side == outcome
-            t.outcome = outcome
-            t.payout = t.shares_held if won else 0.0
-            t.pnl = t.payout - t.cash_out
-            t.pnl_zero_fee = (t.shares if won else 0.0) - t.cost
-            t.status = "WON" if won else "LOST"
-            t.settled_ts = now
-            self.db.update_trade(
-                t.id, status=t.status, outcome=outcome, payout=t.payout, pnl=t.pnl,
-                pnl_zero_fee=t.pnl_zero_fee, settled_ts=now,
-            )
+            won = t.settle(outcome, now)
+            self.db.update_trade(t.id, **t.settled_fields())
             self._changed()
             self._log(
                 "WIN" if won else "LOSS",

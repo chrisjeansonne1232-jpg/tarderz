@@ -32,7 +32,7 @@ mkdir -p "$DIR"
 sha() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1"; else sha256sum "$1"; fi | cut -c1-64; }
 # config.toml: replace it if it is an unmodified copy of an earlier release,
 # keep it (and save the new defaults next to it) if you've edited it.
-SHIPPED="2536e702e6aa5518fe4ee785793415a92f340ea19eba59f36ac53a2f110715ca 423bddbe5dc5c398757ac3685e71b570387f52a1b59914445f767ea52b757d96 28f8344f62acc3f04ab7c5e215df3427eb903fe880c5f93373f77fac3a659e74 071340332ce3dd87563729c54784a1176743c9cc367fa17d75c36e55363fe788 78ed7a464ce53ee4f5a82e73fb2d04780570d51f9c705ccf14fd395e781069a8 70711e73c3c3c219f07423a5bd0a0d6221422d06cc9b43daacb9bb83c93156d6"
+SHIPPED="2536e702e6aa5518fe4ee785793415a92f340ea19eba59f36ac53a2f110715ca 423bddbe5dc5c398757ac3685e71b570387f52a1b59914445f767ea52b757d96 28f8344f62acc3f04ab7c5e215df3427eb903fe880c5f93373f77fac3a659e74 071340332ce3dd87563729c54784a1176743c9cc367fa17d75c36e55363fe788 78ed7a464ce53ee4f5a82e73fb2d04780570d51f9c705ccf14fd395e781069a8 70711e73c3c3c219f07423a5bd0a0d6221422d06cc9b43daacb9bb83c93156d6 c75d98666829b6b35d7aa7ca70a84c00e0d010939f3c42c82b954e515a7fc078"
 [ -f "$DIR/.config.shipped.sha256" ] && SHIPPED="$SHIPPED $(cat "$DIR/.config.shipped.sha256")"
 NEW_HASH=$(sha "$TMP/src/config.toml")
 if [ -f "$DIR/config.toml" ]; then
