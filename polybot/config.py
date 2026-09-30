@@ -55,6 +55,8 @@ class MarketsConfig:
     # Light poll of the current market on Gamma; keeps the Gamma status honest
     # (it is a REST API, not a stream). 0 disables.
     gamma_heartbeat_s: float = 2.0
+    # Subscribe to a window's order books this long before it starts (not at discovery).
+    subscribe_ahead_s: float = 15.0
     # A window is flagged "rules not verified" (and never traded) unless its
     # description contains every one of these terms (case-insensitive).
     required_description_terms: list[str] = field(
@@ -98,6 +100,8 @@ class PolymarketWSConfig:
     # Resubscribe an asset if its local book disagrees with the server's
     # best bid/ask for this long.
     desync_resync_s: float = 5.0
+    # Ask for best_bid_ask / new_market / market_resolved events too (extra traffic, not needed).
+    custom_features: bool = False
 
 
 @dataclass

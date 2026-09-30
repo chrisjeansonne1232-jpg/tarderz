@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import math
+import re
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable
@@ -73,6 +74,8 @@ class MarketWindow:
     ptb_seen_at: float | None = None
     s0_checked: bool = False
     _ptb_next_poll: float = 0.0
+    _ptb_polls: int = 0
+    _ptb_fields: str = ""  # price-like fields seen in Gamma's response (diagnostics)
     # Streaming / resolution state.
     subscribed: bool = False
     streaming_done: bool = False
@@ -113,6 +116,36 @@ def extract_price_to_beat(event: dict) -> float | None:
             if v > 0 and math.isfinite(v):
                 return v
     return None
+
+
+_PRICE_KEY = re.compile(r"beat|strike|open.*price|start.*price|reference|metadata", re.I)
+
+
+def price_like_fields(event: dict) -> str:
+    """Compact list of fields that might hold a start price, for diagnostics
+    (so we learn the real field name if Polymarket uses a different one)."""
+    found: list[str] = []
+
+    def walk(obj: object, path: str, depth: int) -> None:
+        if depth > 3 or len(found) >= 12:
+            return
+        if isinstance(obj, str) and obj.startswith("{"):
+            try:
+                obj = json.loads(obj)
+            except ValueError:
+                return
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                p = f"{path}.{k}" if path else k
+                if _PRICE_KEY.search(k) and not isinstance(v, (dict, list)):
+                    found.append(f"{p}={str(v)[:40]}")
+                walk(v, p, depth + 1)
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj[:3]):
+                walk(v, f"{path}[{i}]", depth + 1)
+
+    walk(event, "", 0)
+    return "; ".join(found)
 
 
 def parse_event(event: dict, series: SeriesConfig, required_terms: list[str]) -> MarketWindow:
@@ -287,7 +320,8 @@ class SeriesTracker:
                 await self._discover(start)
 
         for start, w in list(self.windows.items()):
-            if not w.subscribed and not w.streaming_done and now < w.end_ts:
+            ahead = self.cfg.markets.subscribe_ahead_s
+            if not w.subscribed and not w.streaming_done and w.start_ts - ahead <= now < w.end_ts:
                 await self.channel.subscribe(w.tokens)
                 w.subscribed = True
             self._capture_boundaries(w, now)
@@ -298,6 +332,8 @@ class SeriesTracker:
                 w.subscribed = False
                 w.streaming_done = True
             if w.streaming_done and w.end_status != "pending":
+                if w.ptb_polymarket is None and w._ptb_polls:
+                    self._report_missing_ptb(w)
                 self.on_ended(w)
                 del self.windows[start]
 
@@ -350,6 +386,7 @@ class SeriesTracker:
         if now < w._ptb_next_poll:
             return
         w._ptb_next_poll = now + (5.0 if now < w.start_ts + 60.0 else 15.0)
+        w._ptb_polls += 1
         try:
             event = await self.gamma.event_by_slug(w.slug)
         except HttpError as e:
@@ -357,12 +394,22 @@ class SeriesTracker:
             return
         ptb = extract_price_to_beat(event) if event else None
         if ptb is None:
+            if event:
+                w._ptb_fields = price_like_fields(event)
             return
         w.ptb_polymarket, w.ptb_seen_at = ptb, time.time()
         self.db.set_price_to_beat(w.slug, ptb, w.ptb_seen_at)
         if w.s0_status != "ok":
             w.s0_status = "ok"
             self.db.update_boundaries(w)
+
+    def _report_missing_ptb(self, w: MarketWindow) -> None:
+        self._missing_ptb = getattr(self, "_missing_ptb", 0) + 1
+        msg = (f"{w.slug}: Polymarket published no price to beat on Gamma ({w._ptb_polls} checks); "
+               f"price-like fields seen: {w._ptb_fields or 'none'}")
+        self.db.log_event("INFO", "no_price_to_beat", w.slug, msg)
+        # Surface it for the first couple of windows; after that the file log is enough.
+        (log.warning if self._missing_ptb <= 2 else log.info)(msg)
 
     def _check_s0(self, w: MarketWindow) -> None:
         """Once both are known, compare our Chainlink start price with Polymarket's."""

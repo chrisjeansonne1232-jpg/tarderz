@@ -36,7 +36,7 @@
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
         # config.toml: replace it if it is an unmodified copy of an earlier release,
         # keep it (and save the new defaults next to it) if you've edited it.
-        $shipped = @("2536e702e6aa5518fe4ee785793415a92f340ea19eba59f36ac53a2f110715ca", "423bddbe5dc5c398757ac3685e71b570387f52a1b59914445f767ea52b757d96")
+        $shipped = @("2536e702e6aa5518fe4ee785793415a92f340ea19eba59f36ac53a2f110715ca", "423bddbe5dc5c398757ac3685e71b570387f52a1b59914445f767ea52b757d96", "28f8344f62acc3f04ab7c5e215df3427eb903fe880c5f93373f77fac3a659e74")
         $stampFile = Join-Path $dir ".config.shipped.sha256"
         if (Test-Path -LiteralPath $stampFile) { $shipped += (Get-Content -LiteralPath $stampFile -Raw).Trim().ToLower() }
         $newCfg = Join-Path $src.FullName "config.toml"

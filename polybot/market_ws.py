@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
+from collections import ChainMap, Counter
 from dataclasses import dataclass
 from typing import Callable
 
@@ -45,11 +47,14 @@ class MarketChannel(ReconnectingWS):
         cfg: PolymarketWSConfig,
         on_book: Callable[[str], None] | None = None,
         on_resolved: Callable[[dict], None] | None = None,
+        name: str = "polymarket",
     ) -> None:
         super().__init__(
             session, url, ping_text="PING", ping_interval_s=cfg.ping_interval_s, stale_s=cfg.stale_s
         )
+        self.name = name
         self.cfg = cfg
+        self.type_counts: Counter[str] = Counter()
         self.books: dict[str, OrderBook] = {}
         self.last_trade: dict[str, TradePrint] = {}
         self.on_book = on_book
@@ -66,7 +71,7 @@ class MarketChannel(ReconnectingWS):
         for a in new:
             self.books[a] = OrderBook(a)
         if new and self.connected:
-            await self.send_json({"assets_ids": new, "operation": "subscribe", "custom_feature_enabled": True})
+            await self.send_json(self._sub({"assets_ids": new, "operation": "subscribe"}))
 
     async def unsubscribe(self, asset_ids: list[str]) -> None:
         gone = [a for a in asset_ids if a in self.books]
@@ -80,9 +85,14 @@ class MarketChannel(ReconnectingWS):
         for b in self.books.values():
             b.reset()
         self._resync_pending.clear()
-        await ws.send_json(
-            {"assets_ids": list(self.books), "type": "market", "custom_feature_enabled": True}
-        )
+        await ws.send_json(self._sub({"assets_ids": list(self.books), "type": "market"}))
+
+    def _sub(self, msg: dict) -> dict:
+        # best_bid_ask / new_market / market_resolved are optional extra traffic;
+        # price_change already carries the server's best bid/ask.
+        if self.cfg.custom_features:
+            msg["custom_feature_enabled"] = True
+        return msg
 
     def on_disconnect(self) -> None:
         for b in self.books.values():
@@ -102,9 +112,7 @@ class MarketChannel(ReconnectingWS):
                 self.resyncs += 1
                 if self.connected:
                     await self.send_json({"assets_ids": [a], "operation": "unsubscribe"})
-                    await self.send_json(
-                        {"assets_ids": [a], "operation": "subscribe", "custom_feature_enabled": True}
-                    )
+                    await self.send_json(self._sub({"assets_ids": [a], "operation": "subscribe"}))
 
     # --- message handling ---------------------------------------------------
     def on_text(self, text: str, recv_ts: float) -> None:
@@ -116,6 +124,7 @@ class MarketChannel(ReconnectingWS):
 
     def _handle(self, m: dict, recv_ts: float) -> None:
         et = m.get("event_type")
+        self.type_counts[str(et)] += 1
         if et == "book":
             b = self.books.get(m.get("asset_id", ""))
             if b is None:
@@ -135,6 +144,7 @@ class MarketChannel(ReconnectingWS):
             if changes is None:  # older payload shape
                 changes = [dict(c, asset_id=m.get("asset_id")) for c in m.get("changes") or []]
             touched: set[str] = set()
+            tops: dict[str, tuple] = {}
             for c in changes:
                 b = self.books.get(c.get("asset_id", ""))
                 if b is None or not b.ready:
@@ -142,7 +152,9 @@ class MarketChannel(ReconnectingWS):
                 b.apply_level(c["side"], c["price"], c["size"], exch_ts, recv_ts)
                 touched.add(b.asset_id)
                 if "best_bid" in c or "best_ask" in c:
-                    b.check_top(c.get("best_bid"), c.get("best_ask"), recv_ts)
+                    tops[b.asset_id] = (c.get("best_bid"), c.get("best_ask"))
+            for a, (bb, ba) in tops.items():  # compare once per book, after all its changes
+                self.books[a].check_top(bb, ba, recv_ts)
             if self.on_book:
                 for a in touched:
                     self.on_book(a)
@@ -169,3 +181,61 @@ class MarketChannel(ReconnectingWS):
         elif et == "market_resolved":
             if self.on_resolved:
                 self.on_resolved(m)
+
+
+class ChannelGroup:
+    """One market-channel connection per series, presented as a single feed.
+
+    Splitting the (very busy) stream means each connection carries less
+    traffic, and when Polymarket drops a connection only that market's books
+    blank out while it reconnects."""
+
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        cfg: PolymarketWSConfig,
+        series: list[str],
+        on_resolved: Callable[[dict], None] | None = None,
+    ) -> None:
+        self.channels = {
+            s: MarketChannel(session, url, cfg, on_resolved=on_resolved, name=f"polymarket[{s}]") for s in series
+        }
+        # Read-only view across every connection's books (dicts are shared, not copied).
+        self.books = ChainMap(*[c.books for c in self.channels.values()])
+
+    def channel_for(self, series: str) -> MarketChannel:
+        return self.channels[series]
+
+    def _active(self) -> list[MarketChannel]:
+        return [c for c in self.channels.values() if c.wants_connection()]
+
+    @property
+    def connected(self) -> bool:
+        active = self._active()
+        return bool(active) and all(c.connected for c in active)
+
+    @property
+    def last_data_recv(self) -> float:
+        """The stalest active connection, so one silent market shows as stale."""
+        active = self._active() or list(self.channels.values())
+        return min(c.last_data_recv for c in active)
+
+    @property
+    def messages(self) -> int:
+        return sum(c.messages for c in self.channels.values())
+
+    @property
+    def connects(self) -> int:
+        return sum(c.connects for c in self.channels.values())
+
+    @property
+    def resyncs(self) -> int:
+        return sum(c.resyncs for c in self.channels.values())
+
+    async def maintain(self) -> None:
+        for c in self.channels.values():
+            await c.maintain()
+
+    async def run(self, stop: asyncio.Event) -> None:
+        await asyncio.gather(*(c.run(stop) for c in self.channels.values()))

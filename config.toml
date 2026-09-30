@@ -21,6 +21,7 @@ discover_ahead_s = 120          # look up the next window this long before rollo
 discover_retry_s = 5
 unsubscribe_after_end_s = 20
 gamma_heartbeat_s = 2           # light poll of the live market on Gamma (feeds the Gamma status dot)
+subscribe_ahead_s = 15          # subscribe to a window's order books this long before it starts
 # Never trade a window unless its description contains all of these:
 required_description_terms = ["Chainlink", "greater than or equal"]
 
@@ -62,6 +63,7 @@ boundary_max_delay_s = 0        # 0 = only a Chainlink report stamped exactly at
 ping_interval_s = 10            # docs: send PING every 10 s
 stale_s = 60
 desync_resync_s = 5
+custom_features = false         # extra best_bid_ask/new_market/market_resolved events (more traffic; not needed)
 
 [model]
 vol_lookback_min = 30           # N minutes of realized vol

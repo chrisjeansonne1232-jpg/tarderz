@@ -346,3 +346,20 @@ def test_database_migrates_old_markets_table(tmp_path):
     assert chk["compared"] == 1 and chk["matched"] == 1 and abs(chk["median_abs_diff"] - 0.2) < 1e-9
     db.set_price_to_beat("a", 103.0, 1.0)
     assert db.s0_check()["matched"] == 0
+
+
+def test_channel_group_merges_books_and_reports_stalest():
+    import asyncio
+
+    from polybot.market_ws import ChannelGroup
+
+    g = ChannelGroup(None, "ws://x", PolymarketWSConfig(), ["a", "b"])  # type: ignore[arg-type]
+    asyncio.run(g.channel_for("a").subscribe(["UP_A"]))
+    asyncio.run(g.channel_for("b").subscribe(["UP_B"]))
+    assert g.books.get("UP_A") is g.channel_for("a").books["UP_A"] and "UP_B" in g.books
+    g.channel_for("a").last_data_recv, g.channel_for("b").last_data_recv = 100.0, 90.0
+    assert g.last_data_recv == 90.0  # one quiet market makes the CLOB feed look stale
+    asyncio.run(g.channel_for("b").unsubscribe(["UP_B"]))
+    assert "UP_B" not in g.books and g.last_data_recv == 100.0  # idle connections don't count
+    # Subscriptions only ask for the optional event types when configured.
+    assert "custom_feature_enabled" not in g.channel_for("a")._sub({"assets_ids": []})

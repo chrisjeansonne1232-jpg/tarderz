@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import Counter, deque
 from typing import Callable
 
 import aiohttp
@@ -47,6 +48,11 @@ class ReconnectingWS:
         self.disconnects = 0
         self.messages = 0
         self.last_data_recv = 0.0
+        self.bytes_in = 0
+        # Diagnostics: how long connections live and why they end.
+        self.lifetimes: deque[float] = deque(maxlen=200)
+        self.close_reasons: Counter[str] = Counter()
+        self._connected_at = 0.0
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         # Optional hook: on_status(feed_name, "connected" | "disconnected", detail)
         self.on_status: Callable[[str, str, str], None] | None = None
@@ -113,7 +119,7 @@ class ReconnectingWS:
                     self._ws = ws
                     self.connected = True
                     self.connects += 1
-                    self.last_data_recv = time.time()
+                    self.last_data_recv = self._connected_at = time.time()
                     log.info("%s: connected to %s", self.name, self.url)
                     self._status("connected", self.url)
                     await self.on_open(ws)
@@ -127,6 +133,8 @@ class ReconnectingWS:
                 if self.connected:
                     self.disconnects += 1
                     if not stop.is_set():
+                        self.lifetimes.append(time.time() - self._connected_at)
+                        self.close_reasons[self._last_reason] += 1
                         self._status("disconnected", self._last_reason)
                 self._last_reason = "connection lost"
                 self._ws = None
@@ -163,6 +171,7 @@ class ReconnectingWS:
                 recv_ts = time.time()
                 self.last_data_recv = recv_ts
                 self.messages += 1
+                self.bytes_in += len(text)
                 if not got_data:
                     got_data = True
                     backoff.reset()

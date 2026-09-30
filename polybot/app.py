@@ -20,7 +20,7 @@ from .config import Config
 from .db import Database
 from .fairvalue import BasisEstimator, VolEstimator, annualize, fair_up_probability
 from .feeds import ChainlinkFeed, CoinbaseFeed, OracleTick, SpotTick
-from .market_ws import MarketChannel
+from .market_ws import ChannelGroup
 from .markets import MarketWindow, SeriesTracker
 from .resolution import ResolutionWatcher
 from .rest import ClobClient, CoinbaseRest, GammaClient, HttpError
@@ -120,17 +120,21 @@ class App:
             if cfg.chainlink.enabled
             else None
         )
-        self.channel = MarketChannel(session, cfg.endpoints.market_ws, cfg.polymarket_ws, on_resolved=self._on_ws_resolved)
-        for feed in (self.coinbase, self.chainlink, self.channel):
-            if feed is not None:
-                feed.on_status = self._on_feed_status
+        series_names = [s.name for s in cfg.markets.series if s.enabled]
+        self.channel = ChannelGroup(
+            session, cfg.endpoints.market_ws, cfg.polymarket_ws, series_names, on_resolved=self._on_ws_resolved
+        )
+        self._feeds_by_name = {f.name: f for f in (self.coinbase, self.chainlink, *self.channel.channels.values()) if f}
+        for feed in self._feeds_by_name.values():
+            feed.on_status = self._on_feed_status
+        self._diag_prev: dict[str, tuple[float, dict]] = {}
         self.resolver = ResolutionWatcher(cfg.resolution, self.gamma, self._on_resolved)
         assert self.db is not None
         for slug, market_id, end_ts in self.db.unresolved_markets(time.time()):
             self.resolver.add(slug, market_id, end_ts)
         self.trackers = [
             SeriesTracker(
-                s, cfg, self.gamma, self.clob, self.channel, self.coinbase, self.chainlink, self.db,
+                s, cfg, self.gamma, self.clob, self.channel.channel_for(s.name), self.coinbase, self.chainlink, self.db,
                 on_ended=self._on_window_ended, on_discovered=self._on_discovered,
                 on_s0_check=self._on_s0_check,
             )
@@ -251,7 +255,7 @@ class App:
 
     def _on_feed_status(self, name: str, event: str, detail: str) -> None:
         if event == "connected":
-            feed = {"coinbase": self.coinbase, "chainlink": self.chainlink, "polymarket": self.channel}.get(name)
+            feed = self._feeds_by_name.get(name)
             again = feed is not None and feed.connects > 1
             self.exec_log("RECONNECT", f"{name}: {'reconnected' if again else 'connected'} ({detail})", echo=False)
 
@@ -462,6 +466,28 @@ class App:
             "up" if self.channel.connected else "DOWN", self.channel.messages, max(0, self.channel.connects - 1),
             self.channel.resyncs, agree, total, len(self.resolver.pending),
         )
+        self._log_ws_diagnostics()
+
+    def _log_ws_diagnostics(self) -> None:
+        """Per Polymarket connection, since the last summary: messages/s by type,
+        KB/s, how long connections lasted and why they closed."""
+        now = time.time()
+        for name, ch in self.channel.channels.items():
+            snap = {"types": dict(ch.type_counts), "bytes": ch.bytes_in, "life": len(ch.lifetimes),
+                    "reasons": dict(ch.close_reasons)}
+            prev_t, prev = self._diag_prev.get(name, (self.started_at, {"types": {}, "bytes": 0, "life": 0, "reasons": {}}))
+            self._diag_prev[name] = (now, snap)
+            dt = max(now - prev_t, 1.0)
+            rates = {k: (v - prev["types"].get(k, 0)) / dt for k, v in snap["types"].items()}
+            rates_txt = ", ".join(f"{k} {r:.0f}/s" for k, r in sorted(rates.items(), key=lambda kv: -kv[1]) if r >= 0.05)
+            lives = list(ch.lifetimes)[prev["life"]:] if len(ch.lifetimes) >= prev["life"] else list(ch.lifetimes)
+            reasons = {k: v - prev["reasons"].get(k, 0) for k, v in snap["reasons"].items() if v - prev["reasons"].get(k, 0)}
+            log.info(
+                "%s: %s | %.0f KB/s | assets %d | disconnects %d%s%s",
+                ch.name, rates_txt or "no messages", (snap["bytes"] - prev["bytes"]) / dt / 1024, len(ch.books), len(lives),
+                f" (lived {', '.join(f'{x:.0f}s' for x in lives[-6:])})" if lives else "",
+                f" reasons {reasons}" if reasons else "",
+            )
 
     # --- helpers for output / dashboard ------------------------------------------------
     def primary_window(self, now: float) -> MarketWindow | None:
