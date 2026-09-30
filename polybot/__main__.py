@@ -163,9 +163,22 @@ def report(cfg: Config) -> int:
     db = Database(str(path), read_only=True)
     try:
         trades = db.all_trades()
+        agree, total = db.oracle_check()
+        try:
+            s0 = db.s0_check()
+        except Exception:  # noqa: BLE001 - database from before the price-to-beat columns
+            s0 = None
     finally:
         db.close()
     print(format_report(summarize(trades, cfg.sim.starting_bankroll, cfg.dashboard.timezone, time.time())))
+    print()
+    print("DATA CHECKS")
+    print(f"  outcome check          {agree}/{total} windows: our Chainlink start/end prices predicted Polymarket's result")
+    if s0 is None or s0["windows_with_ptb"] == 0:
+        print("  S0 check               no Polymarket price-to-beat seen yet")
+    else:
+        print(f"  S0 check               {s0['matched']}/{s0['compared']} windows within $0.50 of Polymarket's price to beat"
+              + (f" (median gap ${s0['median_abs_diff']:.2f}, max ${s0['max_abs_diff']:.2f})" if s0["compared"] else ""))
     return 0
 
 

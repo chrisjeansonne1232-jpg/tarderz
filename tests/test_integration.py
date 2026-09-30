@@ -35,7 +35,6 @@ def make_config(port: int, db_path: str, log_path: str) -> Config:
     cfg.markets.unsubscribe_after_end_s = 2
     cfg.resolution.first_poll_after_end_s = 3.5
     cfg.resolution.poll_s = 1
-    cfg.chainlink.boundary_max_delay_s = 2
     cfg.model.vol_min_live_s = 5
     cfg.watch.print_interval_s = 0.5
     cfg.strategy.min_seconds_remaining = 1.0
@@ -117,6 +116,12 @@ def test_end_to_end_against_fake_exchange(tmp_path, capsys):
     assert compared and all(r[2] == r[3] for r in compared)
     n, with_fv = db.execute("SELECT COUNT(*), COUNT(fair_up) FROM snapshots_1s").fetchone()
     assert n > 30 and with_fv > 10
+    # Polymarket's published price to beat was picked up and agrees with our Chainlink start price.
+    ptb_rows = db.execute(
+        "SELECT s0_chainlink, ptb_polymarket FROM markets WHERE ptb_polymarket IS NOT NULL AND s0_chainlink IS NOT NULL"
+    ).fetchall()
+    assert ptb_rows and all(abs(a - b) < 1e-6 for a, b in ptb_rows)
+    assert db.execute("SELECT COUNT(*) FROM exec_log WHERE msg LIKE '%S0 check OK%'").fetchone()[0] >= 1
     tags = {r[0] for r in db.execute("SELECT DISTINCT tag FROM exec_log")}
     assert {"MKT", "RECONNECT", "SETTLE"} <= tags
     # Paper trades that settled carry consistent P&L.

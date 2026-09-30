@@ -78,6 +78,7 @@ class App:
         self._cond_to_slug: dict[str, str] = {}
         self._subscribers: list[Callable[[dict], None]] = []
         self.log_ring: deque[tuple[float, str, str, str | None]] = deque(maxlen=cfg.dashboard.log_lines)
+        self.log_counts: dict[str, int] = {}
         self.candles = CandleBuilder()
         self.engine = None
         self.loop_lag_ms = 0.0
@@ -89,6 +90,7 @@ class App:
         cfg = self.cfg
         self.db = Database(cfg.general.db_path)
         self.db.log_event("INFO", "start", None, {"mode": self.mode})
+        self.log_counts = dict(self.db.conn.execute("SELECT tag, COUNT(*) FROM exec_log GROUP BY tag").fetchall())
         handler = _ExecLogHandler(self)
         logging.getLogger("polybot").addHandler(handler)
         try:
@@ -130,6 +132,7 @@ class App:
             SeriesTracker(
                 s, cfg, self.gamma, self.clob, self.channel, self.coinbase, self.chainlink, self.db,
                 on_ended=self._on_window_ended, on_discovered=self._on_discovered,
+                on_s0_check=self._on_s0_check,
             )
             for s in cfg.markets.series
             if s.enabled
@@ -223,6 +226,7 @@ class App:
         """One line of the execution log: memory ring, SQLite, dashboard, file log."""
         ts = time.time()
         self.log_ring.append((ts, tag, msg, ref))
+        self.log_counts[tag] = self.log_counts.get(tag, 0) + 1
         if self.db is not None:
             self.db.insert_exec_log(ts, tag, msg, ref)
         self.publish({"type": "log", "line": [ts, tag, msg, ref]})
@@ -256,6 +260,22 @@ class App:
         fee = w.fee.describe() if w.fee else "fee ?"
         rules = "rules verified" if w.rules_ok else "RULES NOT VERIFIED (won't trade): " + "; ".join(w.rules_notes)
         self.exec_log("MKT", f"{w.slug} · {fmt_hms(w.start_ts)}–{fmt_hms(w.end_ts)}Z · {fee} · {rules}")
+
+    def _on_s0_check(self, w: MarketWindow) -> None:
+        ptb = w.ptb_polymarket
+        if w.s0_chainlink is None:
+            self.exec_log("MKT", f"{w.slug}: Polymarket price to beat {ptb:,.2f} (our Chainlink start price was missed; using theirs)")
+            return
+        diff = w.s0_chainlink - ptb  # type: ignore[operator]
+        delay = (w.s0_chainlink_ts or w.start_ts) - w.start_ts
+        if abs(diff) <= 0.5:
+            self.exec_log("MKT", f"{w.slug}: S0 check OK · ours {w.s0_chainlink:,.2f} vs Polymarket {ptb:,.2f}")
+        else:
+            log.warning(
+                "%s: S0 MISMATCH: our Chainlink start %.2f (report %+.1fs after start) vs Polymarket price to beat %.2f (diff %+.2f)",
+                w.slug, w.s0_chainlink, delay, ptb, diff,
+            )
+            self.db.log_event("WARN", "s0_mismatch", w.slug, {"ours": w.s0_chainlink, "polymarket": ptb, "delay_s": delay})
 
     def _on_window_ended(self, w: MarketWindow) -> None:
         self.resolver.add(w.slug, w.market_id, w.end_ts)
@@ -297,8 +317,8 @@ class App:
             return None, "vol warm-up"
         m = self.cfg.model
         basis: float | None = None
-        if m.strike_source == "chainlink":
-            strike = w.s0_chainlink
+        strike, src = self.strike(w)
+        if m.strike_source in ("chainlink", "polymarket"):
             spot_adj = tick.price
             if m.basis_correction:
                 if self.basis.mean is None:
@@ -306,13 +326,24 @@ class App:
                 basis = self.basis.mean
                 spot_adj = tick.price - basis
         else:
-            strike = w.s0_coinbase
             spot_adj = tick.price
         if strike is None:
             return None, f"S0 {w.s0_status}"
         tau = max(w.end_ts - now, 0.0)
         p = fair_up_probability(spot_adj, strike, est.sigma, tau, m.basis_noise_bps / 1e4)
-        return FairValue(now, tau, tick.price, spot_adj, strike, m.strike_source, est.sigma, basis, p), ""
+        return FairValue(now, tau, tick.price, spot_adj, strike, src, est.sigma, basis, p), ""
+
+    def strike(self, w: MarketWindow) -> tuple[float | None, str]:
+        """The window's start price S0 and where it came from ("polymarket",
+        "chainlink" or "coinbase")."""
+        src = self.cfg.model.strike_source
+        if src == "polymarket":
+            if w.ptb_polymarket is not None:
+                return w.ptb_polymarket, "polymarket"
+            return w.s0_chainlink, "chainlink"
+        if src == "chainlink":
+            return w.s0_chainlink, "chainlink"
+        return w.s0_coinbase, "coinbase"
 
     # --- periodic tasks -------------------------------------------------------
     async def _vol_sampler(self) -> None:
@@ -494,7 +525,8 @@ class App:
         flag = "" if w.rules_ok else " [RULES?]"
         head = f"{w.series:<8} τ {fmt_mmss(w.end_ts - now)}"
         if fv:
-            s0 = f"S0 {fv.strike:,.2f}[{'CL' if fv.strike_src == 'chainlink' else 'CB'}] S* {fv.spot_adj:,.2f}"
+            tag = {"polymarket": "PM", "chainlink": "CL"}.get(fv.strike_src, "CB")
+            s0 = f"S0 {fv.strike:,.2f}[{tag}] S* {fv.spot_adj:,.2f}"
             fair = f"fair Up {fv.p_up:.3f} Dn {1 - fv.p_up:.3f}"
         else:
             s0 = f"S0 {w.s0_chainlink:,.2f}" if w.s0_chainlink else "S0 --"

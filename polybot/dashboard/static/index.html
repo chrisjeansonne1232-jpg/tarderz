@@ -277,7 +277,7 @@ const S = {
   log: [], trades: new Map(), signals: new Map(), candles: [],
   connected: false, tickT: 0, tickRecv: 0,
   series: null, logFilter: null, logHover: false, logTouchUntil: 0,
-  dirty: new Set(), pendingLog: [],
+  dirty: new Set(), pendingLog: [], logCounts: {},
 };
 
 // ---------- time ----------
@@ -322,6 +322,15 @@ function win() { return S.tick && S.tick.windows ? S.tick.windows[S.series] : nu
 function best(side) { return side && side.ready && side.asks && side.asks.length ? side.asks[0][0] : null; }
 function bid(side) { return side && side.ready && side.bids && side.bids.length ? side.bids[0][0] : null; }
 function mid(side) { const a = best(side), b = bid(side); return a != null && b != null ? (a + b) / 2 : null; }
+function px(x) { return x == null ? "—" : (x < 0.04 || x > 0.96 ? x.toFixed(3) : x.toFixed(2)); }
+// [value, text]: the midpoint, or the one side that exists (common near a window's end)
+function quote(side) {
+  const a = best(side), b = bid(side);
+  if (a != null && b != null) return [(a + b) / 2, ((a + b) / 2).toFixed(3)];
+  if (b != null) return [b, "bid " + px(b)];
+  if (a != null) return [a, "ask " + px(a)];
+  return [null, side && side.ready ? "no quotes" : "—"];
+}
 function feedAgeMs(name) {
   const f = S.tick && S.tick.feeds ? S.tick.feeds[name] : null;
   if (!f || !f.last) return null;
@@ -346,6 +355,7 @@ function onMsg(m) {
   switch (m.type) {
     case "snapshot":
       S.meta = m.meta; S.stats = m.stats; S.log = m.log || []; S.candles = m.candles || [];
+      S.logCounts = Object.assign({}, m.log_counts || {});
       S.trades = new Map((m.trades || []).map((t) => [t.id, t]));
       S.signals = new Map((m.signals || []).map((s) => [s.id, s]));
       if (!S.series || !S.meta.series.some((x) => x.name === S.series)) S.series = S.meta.primary_series;
@@ -356,6 +366,7 @@ function onMsg(m) {
       break;
     case "tick": applyTick(m); break;
     case "log":
+      S.logCounts[m.line[1]] = (S.logCounts[m.line[1]] || 0) + 1;
       S.log.push(m.line); if (S.log.length > 2000) S.log.splice(0, S.log.length - 2000);
       S.pendingLog.push(m.line); S.dirty.add("log");
       break;
@@ -406,9 +417,9 @@ function renderHeader() {
   const sp = t.spot;
   setNum($("h-btc"), sp ? sp.price : null, sp ? "$" + price(sp.price) : "—");
   const w = win();
-  const um = w ? mid(w.up) : null, dm = w ? mid(w.down) : null;
-  setNum($("h-up"), um, um == null ? "—" : um.toFixed(3));
-  setNum($("h-down"), dm, dm == null ? "—" : dm.toFixed(3));
+  const uq = w ? quote(w.up) : [null, "—"], dq = w ? quote(w.down) : [null, "—"];
+  setNum($("h-up"), uq[0], uq[1]);
+  setNum($("h-down"), dq[0], dq[1]);
   const st = S.stats;
   if (st) {
     setNum($("h-trades"), st.today.trades, String(st.today.trades));
@@ -423,7 +434,19 @@ function renderHeader() {
 function renderStrip() {
   const t = S.tick, w = win(); if (!t) return;
   const s0 = w ? w.s0 : null;
-  setText($("s-s0"), s0 == null ? (w ? "S0 " + w.s0_status : "—") : price(s0) + (w.s0_src === "chainlink" ? " CL" : " CB"));
+  const s0El = $("s-s0");
+  if (s0 == null) { setText(s0El, w ? (w.s0_status === "missed" ? "missed · waiting for Polymarket" : "S0 " + w.s0_status) : "—"); s0El.parentElement.title = ""; }
+  else {
+    const srcTag = { polymarket: " PM", chainlink: " CL", coinbase: " CB" }[w.s0_src] || "";
+    let check = "";
+    if (w.ptb != null && w.s0_cl != null) {
+      const d = w.s0_cl - w.ptb;
+      check = Math.abs(d) <= 0.5 ? " ✓" : ` ≠ ours ${price(w.s0_cl)}`;
+    }
+    setText(s0El, price(s0) + srcTag + check);
+    s0El.parentElement.title = "S0 = window start price. PM = Polymarket's published price to beat, CL = Chainlink report at the start. " +
+      (w.ptb != null && w.s0_cl != null ? `Polymarket ${price(w.ptb)} vs our Chainlink ${price(w.s0_cl)}.` : "");
+  }
   const spot = w && w.spot_adj != null ? w.spot_adj : null;
   if (s0 != null && spot != null) { const d = spot / s0 - 1; setNum($("s-dist"), d, pct(d, 3, true), pnlClass(d)); }
   else setNum($("s-dist"), null, "—", "");
@@ -432,7 +455,7 @@ function renderStrip() {
   if (w && w.fee) {
     const a = best(w.up);
     const perSh = a != null ? w.fee.rate * Math.pow(a * (1 - a), w.fee.exp) : null;
-    setText($("s-fee"), `${w.fee.rate}·${w.fee.exp === 1 ? "p(1−p)" : "(p(1−p))^" + w.fee.exp}` + (perSh != null ? ` · ${(100 * perSh).toFixed(2)}¢/sh @${a.toFixed(2)}` : ""));
+    setText($("s-fee"), `${w.fee.rate}·${w.fee.exp === 1 ? "p(1−p)" : "(p(1−p))^" + w.fee.exp}` + (perSh != null ? ` · ${(100 * perSh).toFixed(2)}¢/sh @${px(a)}` : ""));
   } else setText($("s-fee"), "—");
   for (const [id, v] of [["s-eup", w ? w.edge_up : null], ["s-edn", w ? w.edge_down : null]]) {
     setNum($(id), v, v == null ? (w && w.fv_reason ? w.fv_reason : "—") : cents(v), v == null ? "" : pnlClass(v));
@@ -461,9 +484,7 @@ function renderWallet() {
   }
 }
 
-function tagCounts() {
-  const c = {}; for (const l of S.log) c[l[1]] = (c[l[1]] || 0) + 1; return c;
-}
+function tagCounts() { return S.logCounts || {}; }  // all-time, from the bot's database
 function logLine(l) {
   const d = document.createElement("div"); d.className = "ln";
   const tag = TAGS.includes(l[1]) ? l[1] : "MKT";

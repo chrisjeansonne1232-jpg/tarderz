@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable
@@ -67,6 +68,11 @@ class MarketWindow:
     end_chainlink_ts: float | None = None
     end_coinbase: float | None = None
     end_status: str = "pending"
+    # Polymarket's own published start price ("Price to beat"), when Gamma has it.
+    ptb_polymarket: float | None = None
+    ptb_seen_at: float | None = None
+    s0_checked: bool = False
+    _ptb_next_poll: float = 0.0
     # Streaming / resolution state.
     subscribed: bool = False
     streaming_done: bool = False
@@ -84,6 +90,29 @@ class MarketWindow:
         if self.s0_chainlink is None or self.end_chainlink is None:
             return None
         return "Up" if self.end_chainlink >= self.s0_chainlink else "Down"  # ties -> Up
+
+
+def extract_price_to_beat(event: dict) -> float | None:
+    """Polymarket's official start price for a crypto Up/Down window, if Gamma
+    has published it: eventMetadata.priceToBeat on the event or its market
+    (an object or a JSON string)."""
+    for src in [event, *(event.get("markets") or [])]:
+        meta = src.get("eventMetadata") if isinstance(src, dict) else None
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except ValueError:
+                continue
+        if not isinstance(meta, dict):
+            continue
+        for key in ("priceToBeat", "price_to_beat"):
+            try:
+                v = float(meta.get(key))  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            if v > 0 and math.isfinite(v):
+                return v
+    return None
 
 
 def parse_event(event: dict, series: SeriesConfig, required_terms: list[str]) -> MarketWindow:
@@ -216,6 +245,7 @@ class SeriesTracker:
         db: "Database",
         on_ended: Callable[[MarketWindow], None],
         on_discovered: Callable[[MarketWindow], None] | None = None,
+        on_s0_check: Callable[[MarketWindow], None] | None = None,
     ) -> None:
         self.s = series
         self.cfg = cfg
@@ -227,6 +257,7 @@ class SeriesTracker:
         self.db = db
         self.on_ended = on_ended
         self.on_discovered = on_discovered
+        self.on_s0_check = on_s0_check
         self.windows: dict[int, MarketWindow] = {}
         self._next_try: dict[int, float] = {}
         self.discovery_failures = 0
@@ -260,6 +291,8 @@ class SeriesTracker:
                 await self.channel.subscribe(w.tokens)
                 w.subscribed = True
             self._capture_boundaries(w, now)
+            await self._poll_price_to_beat(w, now)
+            self._check_s0(w)
             if w.subscribed and now >= w.end_ts + self.cfg.markets.unsubscribe_after_end_s:
                 await self.channel.unsubscribe(w.tokens)
                 w.subscribed = False
@@ -279,6 +312,11 @@ class SeriesTracker:
                 raise ParseError(f"no Gamma event with slug {slug}")
             w = parse_event(event, self.s, self.cfg.markets.required_description_terms)
             w.fee, fee_notes = await resolve_fee_model(self.cfg, self.clob, w)
+            now = time.time()
+            if now >= w.start_ts:  # a start price can't exist before the window starts
+                w.ptb_polymarket = extract_price_to_beat(event)
+                if w.ptb_polymarket is not None:
+                    w.ptb_seen_at = now
         except (HttpError, ParseError, KeyError, ValueError) as e:
             self.discovery_failures += 1
             self._next_try[start] = time.time() + self.cfg.markets.discover_retry_s
@@ -294,6 +332,8 @@ class SeriesTracker:
             self.db.log_event("WARN", "rules_note", slug, n)
         self.windows[start] = w
         self.db.upsert_market(w)
+        if w.ptb_polymarket is not None:
+            self.db.set_price_to_beat(w.slug, w.ptb_polymarket, w.ptb_seen_at)
         if self.on_discovered is not None:
             self.on_discovered(w)
         log.info(
@@ -301,6 +341,38 @@ class SeriesTracker:
             self.s.name, slug, fmt_utc(w.start_ts), fmt_utc(w.end_ts), w.rules_ok,
             w.fee.describe() if w.fee else "?", w.resolution_source or "?",
         )
+
+    async def _poll_price_to_beat(self, w: MarketWindow, now: float) -> None:
+        """Ask Gamma for Polymarket's published start price until it appears
+        (every 5 s for the first minute of the window, then every 15 s)."""
+        if w.ptb_polymarket is not None or now < w.start_ts + 2.0 or now > w.end_ts + 120.0:
+            return
+        if now < w._ptb_next_poll:
+            return
+        w._ptb_next_poll = now + (5.0 if now < w.start_ts + 60.0 else 15.0)
+        try:
+            event = await self.gamma.event_by_slug(w.slug)
+        except HttpError as e:
+            log.debug("%s: price-to-beat poll failed: %s", w.slug, e)
+            return
+        ptb = extract_price_to_beat(event) if event else None
+        if ptb is None:
+            return
+        w.ptb_polymarket, w.ptb_seen_at = ptb, time.time()
+        self.db.set_price_to_beat(w.slug, ptb, w.ptb_seen_at)
+        if w.s0_status != "ok":
+            w.s0_status = "ok"
+            self.db.update_boundaries(w)
+
+    def _check_s0(self, w: MarketWindow) -> None:
+        """Once both are known, compare our Chainlink start price with Polymarket's."""
+        if w.s0_checked or w.ptb_polymarket is None:
+            return
+        if w.s0_chainlink is None and w.s0_status == "pending":
+            return  # our own capture may still arrive
+        w.s0_checked = True
+        if self.on_s0_check is not None:
+            self.on_s0_check(w)
 
     def _coinbase_asof(self, ts: float) -> float | None:
         h = self.coinbase.history
@@ -312,7 +384,7 @@ class SeriesTracker:
 
     def _capture_boundaries(self, w: MarketWindow, now: float) -> None:
         late = self.cfg.chainlink.boundary_max_delay_s + 2.0
-        use_cl = self.cfg.model.strike_source == "chainlink"
+        use_cl = self.cfg.model.strike_source in ("chainlink", "polymarket")
         changed = False
         for which, ts in (("s0", w.start_ts), ("end", w.end_ts)):
             status_attr = f"{which}_status"
@@ -341,6 +413,8 @@ class SeriesTracker:
             if getattr(w, status_attr) != "pending":
                 continue
             have = getattr(w, cl_attr) if use_cl else getattr(w, cb_attr)
+            if which == "s0" and self.cfg.model.strike_source == "polymarket" and w.ptb_polymarket is not None:
+                have = w.ptb_polymarket
             if have is not None:
                 setattr(w, status_attr, "ok")
                 changed = True

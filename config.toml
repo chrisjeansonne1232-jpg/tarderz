@@ -56,7 +56,7 @@ topic = "crypto_prices_chainlink"
 symbol = "btc/usd"
 ping_interval_s = 5
 stale_s = 30
-boundary_max_delay_s = 5        # max lateness of the tick used as a window's start/end price
+boundary_max_delay_s = 0        # 0 = only a Chainlink report stamped exactly at the window start/end counts
 
 [polymarket_ws]
 ping_interval_s = 10            # docs: send PING every 10 s
@@ -69,7 +69,8 @@ vol_sample_s = 1.0
 vol_min_live_s = 120
 vol_bootstrap_candles = true    # seed vol from Coinbase 1-minute candles at startup
 vol_floor_annual = 0.10
-strike_source = "chainlink"     # S0 = Chainlink price at window start (what resolution uses)
+strike_source = "polymarket"    # S0 = Polymarket's published price to beat (Gamma eventMetadata.priceToBeat);
+                                # until it appears, the Chainlink report at the window start. "chainlink" / "coinbase" also work
 basis_correction = true         # S = Coinbase - EWMA(Coinbase - Chainlink)
 basis_halflife_s = 120
 basis_noise_bps = 0.0           # extra uncertainty for Coinbase/Chainlink gap; 0 = your exact formula

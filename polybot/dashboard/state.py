@@ -112,10 +112,12 @@ class LiveSource:
         fv, why = app.fair_value(w, now)
         up = app.channel.books.get(w.up_token)
         dn = app.channel.books.get(w.down_token)
+        strike, src = app.strike(w)
         out: dict[str, Any] = {
             "slug": w.slug, "series": w.series, "start": w.start_ts, "end": w.end_ts,
-            "s0": fv.strike if fv else (w.s0_chainlink if app.cfg.model.strike_source == "chainlink" else w.s0_coinbase),
-            "s0_status": w.s0_status, "s0_src": app.cfg.model.strike_source,
+            "s0": strike, "s0_status": w.s0_status, "s0_src": src,
+            # Both start prices, so the dashboard can show whether they agree.
+            "ptb": w.ptb_polymarket, "s0_cl": w.s0_chainlink,
             "spot_adj": fv.spot_adj if fv else None,
             "fair_up": fv.p_up if fv else None, "fv_reason": why,
             "rules_ok": w.rules_ok,
@@ -189,6 +191,7 @@ class LiveSource:
             "tick": self.tick(),
             "stats": eng.stats(now) if eng else None,
             "log": [list(x) for x in app.log_ring],
+            "log_counts": dict(app.log_counts),
             "trades": [t.public() for t in eng.trades[-300:]] if eng else [],
             "signals": signals,
             "candles": app.candles.all(),

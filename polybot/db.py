@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS markets (
     s0_chainlink REAL, s0_chainlink_ts REAL, s0_coinbase REAL, s0_status TEXT,
     end_chainlink REAL, end_chainlink_ts REAL, end_coinbase REAL, end_status TEXT,
     chainlink_predicted TEXT, ws_resolved_outcome TEXT,
-    resolved_outcome TEXT, resolved_at REAL, resolution_detail TEXT
+    resolved_outcome TEXT, resolved_at REAL, resolution_detail TEXT,
+    ptb_polymarket REAL, ptb_seen_at REAL
 );
 
 -- One row per series per second: spot, oracle, fair value and top of book,
@@ -97,7 +98,15 @@ class Database:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.executescript(SCHEMA)
+        # Databases created by earlier versions: add columns that didn't exist yet.
+        self._ensure_columns("markets", {"ptb_polymarket": "REAL", "ptb_seen_at": "REAL"})
         self.conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '2')")
+
+    def _ensure_columns(self, table: str, cols: dict[str, str]) -> None:
+        have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+        for name, typ in cols.items():
+            if name not in have:
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {typ}")
 
     def size_bytes(self) -> int:
         total = 0
@@ -152,6 +161,24 @@ class Database:
                 w.chainlink_predicted_outcome(), w.slug,
             ),
         )
+
+    def set_price_to_beat(self, slug: str, ptb: float, seen_at: float | None) -> None:
+        self.conn.execute("UPDATE markets SET ptb_polymarket=?, ptb_seen_at=? WHERE slug=?", (ptb, seen_at, slug))
+
+    def s0_check(self, tolerance: float = 0.5) -> dict[str, Any]:
+        """Our Chainlink start price vs Polymarket's published price to beat."""
+        rows = self.conn.execute(
+            "SELECT s0_chainlink - ptb_polymarket FROM markets WHERE s0_chainlink IS NOT NULL AND ptb_polymarket IS NOT NULL"
+        ).fetchall()
+        diffs = sorted(abs(r[0]) for r in rows)
+        with_ptb = self.conn.execute("SELECT COUNT(*) FROM markets WHERE ptb_polymarket IS NOT NULL").fetchone()[0]
+        return {
+            "compared": len(diffs),
+            "matched": sum(1 for d in diffs if d <= tolerance),
+            "median_abs_diff": diffs[len(diffs) // 2] if diffs else None,
+            "max_abs_diff": diffs[-1] if diffs else None,
+            "windows_with_ptb": with_ptb,
+        }
 
     def set_ws_resolution(self, slug: str, outcome: str) -> None:
         self.conn.execute("UPDATE markets SET ws_resolved_outcome=? WHERE slug=?", (outcome, slug))

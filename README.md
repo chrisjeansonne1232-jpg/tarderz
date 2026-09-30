@@ -252,15 +252,20 @@ it live.
    taken in shares. The V2 SDKs charge them in pUSD on top of notional. The
    default follows the SDKs (`fees.buy_fee_in = "collateral"`). It's
    configurable, and the P&L difference is second-order.
-4. **S0 comes from Chainlink, not Coinbase.** Each market's description says
-   it resolves on the **Chainlink BTC/USD data stream**, and that Up wins if
-   the end price is **greater than or equal to** the start price (ties go
-   Up). Coinbase and Chainlink differ by a few dollars, which is decisive
-   near expiry. So S0 is the Chainlink price at the window start (via
-   Polymarket's RTDS `crypto_prices_chainlink` topic), and Coinbase stays the
-   fast feed, shifted by the measured basis. Set `model.strike_source =
-   "coinbase"` and `basis_correction = false` to get your formula with
-   Coinbase-only inputs.
+4. **S0 is Polymarket's own start price, not Coinbase's.** Each market's
+   description says it resolves on the **Chainlink BTC/USD data stream**,
+   and that Up wins if the end price is **greater than or equal to** the start
+   price (ties go Up). Coinbase and Chainlink differ by a few dollars, which
+   is decisive near expiry.
+   - S0 is Polymarket's published "price to beat" (Gamma
+     `eventMetadata.priceToBeat`), once it appears.
+   - Until then, S0 is the Chainlink report stamped exactly at the window start
+     (from Polymarket's RTDS `crypto_prices_chainlink` topic).
+   - Every window the two are compared. A gap over $0.50 is logged as
+     `S0 MISMATCH`, and `report` summarises the matches.
+   - Coinbase stays the fast feed, shifted by the measured basis.
+   - To get your formula with Coinbase-only inputs, set
+     `model.strike_source = "coinbase"` and `basis_correction = false`.
 5. **5-minute markets exist** (since Feb 2026). Slugs are
    `btc-updown-15m-<start>` and `btc-updown-5m-<start>`, where `<start>` is
    the window start in UTC epoch seconds. Both are tracked. The window
@@ -364,10 +369,12 @@ first, then ~4 ticks/s), and that shutdown takes under 4 s.
 ## Known limitations / open questions
 
 - **Exact boundary tick.** Polymarket doesn't document exactly which
-  Chainlink report counts as "the price at the beginning/end". The bot takes
-  the report stamped exactly at the boundary, else the first one after it
-  (up to 5 s late). The oracle check measures whether that matches real
-  resolutions.
+  Chainlink report counts as "the price at the beginning/end". The bot only
+  accepts a report stamped exactly at the boundary (`boundary_max_delay_s =
+  0`). Two checks in `report` verify this against reality:
+  - the S0 check (our start price vs Polymarket's published price to beat)
+  - the outcome check (our Chainlink start/end prices vs Polymarket's
+    posted result)
 - **Your latency is not the fastest.** The simulated 300 ms delay is
   configurable. Real competitors are co-located and faster, so treat
   results as an upper bound.

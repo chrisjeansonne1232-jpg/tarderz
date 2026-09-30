@@ -34,13 +34,27 @@
             throw "the download doesn't look like polybot (no start.ps1)"
         }
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
-        if (Test-Path -LiteralPath (Join-Path $dir "config.toml")) {
-            Write-Host "> keeping your config.toml (this version's defaults saved as config.default.toml)" -ForegroundColor Magenta
-            Move-Item -LiteralPath (Join-Path $src.FullName "config.toml") -Destination (Join-Path $src.FullName "config.default.toml") -Force
+        # config.toml: replace it if it is an unmodified copy of an earlier release,
+        # keep it (and save the new defaults next to it) if you've edited it.
+        $shipped = @("2536e702e6aa5518fe4ee785793415a92f340ea19eba59f36ac53a2f110715ca", "423bddbe5dc5c398757ac3685e71b570387f52a1b59914445f767ea52b757d96")
+        $stampFile = Join-Path $dir ".config.shipped.sha256"
+        if (Test-Path -LiteralPath $stampFile) { $shipped += (Get-Content -LiteralPath $stampFile -Raw).Trim().ToLower() }
+        $newCfg = Join-Path $src.FullName "config.toml"
+        $newHash = (Get-FileHash -LiteralPath $newCfg -Algorithm SHA256).Hash.ToLower()
+        $cfg = Join-Path $dir "config.toml"
+        if (Test-Path -LiteralPath $cfg) {
+            $h = (Get-FileHash -LiteralPath $cfg -Algorithm SHA256).Hash.ToLower()
+            if ($shipped -contains $h) {
+                Write-Host "> updating config.toml to this version's defaults (you hadn't changed it)" -ForegroundColor Magenta
+            } else {
+                Write-Host "> keeping your edited config.toml (this version's defaults saved as config.default.toml)" -ForegroundColor Magenta
+                Move-Item -LiteralPath $newCfg -Destination (Join-Path $src.FullName "config.default.toml") -Force
+            }
         }
         Get-ChildItem -LiteralPath $src.FullName -Force | ForEach-Object {
             Copy-Item -LiteralPath $_.FullName -Destination $dir -Recurse -Force
         }
+        Set-Content -LiteralPath $stampFile -Value $newHash
     } catch {
         Write-Host "Install failed: $($_.Exception.Message)" -ForegroundColor Red
         Write-Host "Download used: $url"
@@ -66,6 +80,7 @@
     }
 
     Write-Host "> installed. Next time: double-click 'Polybot' on your desktop" -ForegroundColor Magenta
+    if ($env:POLYBOT_NO_START) { return }  # for testing the installer alone
     # start.ps1 runs in a child PowerShell so script execution policy doesn't block it.
     $psExe = (Get-Process -Id $PID).Path
     & $psExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir "start.ps1")

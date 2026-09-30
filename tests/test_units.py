@@ -301,3 +301,48 @@ def test_config_rejects_unknown_keys_and_bad_types():
         _build(Config, {"model": {"vol_lookback_min": "5"}}, "")
     cfg = _build(Config, {"model": {"vol_lookback_min": 5}}, "")
     assert cfg.model.vol_lookback_min == 5.0
+
+
+# --- Polymarket price to beat / S0 ------------------------------------------------------
+def test_extract_price_to_beat_shapes():
+    from polybot.markets import extract_price_to_beat
+
+    assert extract_price_to_beat({"eventMetadata": {"priceToBeat": 83498.21}}) == 83498.21
+    assert extract_price_to_beat({"eventMetadata": '{"priceToBeat": "83498.21"}'}) == 83498.21
+    assert extract_price_to_beat({"markets": [{"eventMetadata": {"priceToBeat": "84000"}}]}) == 84000.0
+    assert extract_price_to_beat({"eventMetadata": {"priceToBeat": None}}) is None
+    assert extract_price_to_beat({"eventMetadata": "not json"}) is None
+    assert extract_price_to_beat(SAMPLE_EVENT) is None  # not published yet
+
+
+def test_boundary_requires_exact_timestamp_by_default():
+    feed = ChainlinkFeed(None, "ws://x", ChainlinkConfig(), history_s=3600)  # type: ignore[arg-type]
+    t0 = 1778584200
+    feed.history.append(t0 - 1, 1.0)
+    feed.history.append(t0 + 1, 2.0)  # first report is 1 s late: not the start price
+    assert feed.boundary_price(t0) is None
+    feed.history.append(t0, 3.0)
+    assert feed.boundary_price(t0) == (t0, 3.0)
+    lenient = ChainlinkFeed(None, "ws://x", ChainlinkConfig(boundary_max_delay_s=2), history_s=3600)  # type: ignore[arg-type]
+    lenient.history.append(t0 - 1, 1.0)
+    lenient.history.append(t0 + 1, 2.0)
+    assert lenient.boundary_price(t0) == (t0 + 1, 2.0)
+
+
+def test_database_migrates_old_markets_table(tmp_path):
+    import sqlite3
+
+    from polybot.db import Database
+
+    path = tmp_path / "old.sqlite"
+    old = sqlite3.connect(path)
+    old.execute("CREATE TABLE markets (slug TEXT PRIMARY KEY, s0_chainlink REAL, resolved_outcome TEXT, end_ts REAL, market_id TEXT)")
+    old.execute("INSERT INTO markets(slug, s0_chainlink) VALUES ('a', 100.0)")
+    old.commit()
+    old.close()
+    db = Database(str(path))
+    db.set_price_to_beat("a", 100.2, 1.0)
+    chk = db.s0_check()
+    assert chk["compared"] == 1 and chk["matched"] == 1 and abs(chk["median_abs_diff"] - 0.2) < 1e-9
+    db.set_price_to_beat("a", 103.0, 1.0)
+    assert db.s0_check()["matched"] == 0

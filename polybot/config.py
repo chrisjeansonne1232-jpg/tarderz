@@ -88,7 +88,7 @@ class ChainlinkConfig:
     stale_s: float = 30.0
     # Accept the first Chainlink tick at or after a window boundary only if it
     # is at most this late; otherwise the boundary price is "missed".
-    boundary_max_delay_s: float = 5.0
+    boundary_max_delay_s: float = 0.0
 
 
 @dataclass
@@ -107,7 +107,9 @@ class ModelConfig:
     vol_min_live_s: float = 120.0
     vol_bootstrap_candles: bool = True
     vol_floor_annual: float = 0.10
-    strike_source: str = "chainlink"  # "chainlink" | "coinbase"
+    # "polymarket": Polymarket's published price to beat when Gamma has it, else
+    # the Chainlink report stamped at the window start | "chainlink" | "coinbase"
+    strike_source: str = "polymarket"
     basis_correction: bool = True
     basis_halflife_s: float = 120.0
     basis_noise_bps: float = 0.0
@@ -240,11 +242,11 @@ def validate(cfg: Config) -> None:
         if s.interval_s <= 0 or not s.slug_prefix:
             raise ConfigError(f"series {s.name}: interval_s > 0 and slug_prefix are required")
     _choice(cfg.spot.price_source, ("mid", "last"), "spot.price_source")
-    _choice(cfg.model.strike_source, ("chainlink", "coinbase"), "model.strike_source")
+    _choice(cfg.model.strike_source, ("polymarket", "chainlink", "coinbase"), "model.strike_source")
     _choice(cfg.fees.source, ("clob", "gamma", "fixed"), "fees.source")
     _choice(cfg.fees.buy_fee_in, ("collateral", "shares"), "fees.buy_fee_in")
-    if cfg.model.strike_source == "chainlink" and not cfg.chainlink.enabled:
-        raise ConfigError("model.strike_source = 'chainlink' requires chainlink.enabled = true")
+    if cfg.model.strike_source in ("chainlink", "polymarket") and not cfg.chainlink.enabled:
+        raise ConfigError(f"model.strike_source = {cfg.model.strike_source!r} requires chainlink.enabled = true")
     if cfg.model.vol_sample_s <= 0 or cfg.model.vol_lookback_min <= 0:
         raise ConfigError("model.vol_sample_s and model.vol_lookback_min must be > 0")
     _choice(cfg.sim.adverse_move, ("take", "skip"), "sim.adverse_move")

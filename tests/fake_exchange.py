@@ -64,6 +64,8 @@ class FakeExchange:
         self.stale_fair: dict[str, float] = {}  # lagged fair value per market -> creates "edges"
         self.connections = {"market": 0, "rtds": 0, "coinbase": 0}
         self.paused_until: dict[str, float] = {}  # feed -> time; simulates a silent stall
+        self.ptb_delay_s = 1.0  # when the price to beat shows up on Gamma after the start
+        self.ptb_offset = 0.0   # tests can make Polymarket's number differ from the oracle tick
         self._tasks: list[asyncio.Task] = []
 
     # --- synthetic world ------------------------------------------------------
@@ -148,10 +150,14 @@ class FakeExchange:
         }
 
     def gamma_event(self, info: dict) -> dict:
-        return {
+        ev = {
             "id": "e" + info["id"], "slug": info["slug"], "title": f"Bitcoin Up or Down - fake {info['slug']}",
             "description": DESCRIPTION, "endDate": iso(info["end"]), "markets": [self.gamma_market(info)],
         }
+        # Like Polymarket: the price to beat appears only after the window has started.
+        if time.time() >= info["start"] + self.ptb_delay_s and info["start"] in self.oracle:
+            ev["eventMetadata"] = {"priceToBeat": self.oracle[info["start"]] + self.ptb_offset}
+        return ev
 
     async def h_events(self, req: web.Request) -> web.Response:
         slug = req.query.get("slug")

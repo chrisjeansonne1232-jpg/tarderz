@@ -157,15 +157,15 @@ class ChainlinkFeed(ReconnectingWS):
             self.last = newest
 
     def boundary_price(self, boundary_ts: float) -> tuple[float, float] | None:
-        """Price the market uses for a window boundary: the tick stamped exactly
-        at the boundary if present, else the first tick after it (if not too
-        late). Returns (obs_ts, value) or None if not (yet) available."""
+        """Price for a window boundary: the report stamped exactly at the
+        boundary (or, if `boundary_max_delay_s` > 0, the first one within that
+        many seconds after it). Returns (obs_ts, value) or None."""
         s = self.history.first_at_or_after(boundary_ts)
         if s is None:
             return None
         first = self.history.first()
         if first is not None and first[0] > boundary_ts:
             return None  # history starts after the boundary: we joined late
-        if s[0] - boundary_ts > self.cfg.boundary_max_delay_s:
-            return None
+        if s[0] - boundary_ts > max(self.cfg.boundary_max_delay_s, 0.001):
+            return None  # nothing stamped at the boundary itself (within tolerance)
         return s
