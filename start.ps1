@@ -120,6 +120,24 @@ $lines = & $vpy -m polybot --config $Config discover
 $lines | Out-File -LiteralPath $discover -Encoding utf8
 $lines | Where-Object { $_ -cmatch '^=== |rules verified|fee model used|NOT FOUND|failed|NOTE' } | ForEach-Object { "  $_" }
 
+# --- 3b. Only one Polybot can run at a time ----------------------------------
+# An older copy still running (often a minimized or forgotten window) holds the
+# dashboard port and the database, so stop it before starting this one.
+if ($onWindows) {
+    try {
+        $old = @(Get-CimInstance Win32_Process -Filter "Name = 'python.exe' OR Name = 'pythonw.exe'" -ErrorAction Stop |
+            Where-Object { $_.CommandLine -and $_.CommandLine -match '-m\s+polybot\b' -and $_.CommandLine -match '\s(run|watch)\b' })
+        if ($old.Count -gt 0) {
+            $ids = ($old | ForEach-Object { $_.ProcessId }) -join ", "
+            Say "stopping an older Polybot that was still running (process $ids)"
+            foreach ($p in $old) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+            Start-Sleep -Seconds 3
+        }
+    } catch {
+        Write-Host "(could not check for an older Polybot: $($_.Exception.Message))"
+    }
+}
+
 # --- 4. Start the bot + dashboard (it opens your browser itself) ---------------
 $botArgs = @("-m", "polybot", "--config", $Config, "run", "--dashboard", "--open")
 if ($Ipad) {
