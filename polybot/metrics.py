@@ -217,6 +217,8 @@ def format_whatif(rows: list[dict[str, Any]], since: float | None, tz: str) -> s
     lines += [
         "  Faster orders only matter if the faster rows beat the control clearly and their",
         "  per-window range sits above 0. Overlapping ranges = no demonstrated difference yet.",
+        "  near-certain = a different strategy (buy the favourite late, no model); it passes only",
+        "  if its per-window range stays above 0.",
     ]
     return "\n".join(lines)
 

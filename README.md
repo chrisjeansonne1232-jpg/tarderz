@@ -341,6 +341,45 @@ in `report` (PAST RUNS) and in `data/archive/past_runs/`. Trades that were
 still open at the switch are settled when their markets resolve. Run 1 was
 the original $100 test; run 2 starts at $1,000.
 
+## Near-certain side (second strategy) and `backtest`
+
+Tests on 576 real BTC markets (October 2026) showed two things:
+- **The original model loses.** Replayed with only the information it would
+  have had, it lost about $3.35 per market after fees, worse than picking a
+  side at random. When it disagrees with the market, the market is usually
+  right, and it overrates long shots badly (sides at 2-5c won 1.9% of the
+  time; the model said 7.8%).
+- **The crowd overprices long shots too**, so the near-certain side may be
+  slightly underpriced.
+
+The near-certain wallet (`[whatif] near_certain*`) tests that second idea.
+In the final 15% of each window it buys the side whose best ask is 95-97c.
+It uses no model, and its order limit is the signal price, so it never pays
+up. It runs as one more paper wallet (`fav 95-97c` in the Analytics panel and
+in `report`).
+
+To check it against everything the bot has already recorded:
+
+```bash
+python -m polybot backtest
+```
+
+This replays the bot's own 1-second order-book recordings (`snapshots_1s`)
+with the same fill rules as live paper trading:
+- the order fills at the next recorded second, never above the signal price;
+- never more than the displayed size;
+- each market's own fee.
+
+It tries a small grid of settings, picks one using only the earlier 60% of
+the markets, and scores it on the later 40%, so the verdict comes from data
+the choice never saw. A copy is saved to
+`data/archive/backtest_near_certain.txt`. Treat a pass as "worth more paper
+testing", not as proof.
+
+The paper bankroll is $100,000 so no wallet runs out of cash and stops
+collecting data. The size of each trade is still `max_trade_usd` /
+`max_window_usd` ($10 / $25).
+
 ## Latency what-if
 
 "Would a faster connection make this profitable?" The bot runs extra paper

@@ -95,7 +95,8 @@ skip_log_interval_s = 5         # log at most one skipped opportunity per window
 
 [sim]
 run = 2                         # raise this number to start a fresh run (the old trades are kept as a past run)
-starting_bankroll = 1000.0      # run 1 started at $100
+starting_bankroll = 100000.0    # large so it never runs out of cash and stops collecting data;
+                                # bet sizes are max_trade_usd / max_window_usd below (run 1 started at $100)
 latency_ms = 300                # signal -> fill delay; fills use the book as it looks AFTER the delay
 adverse_move = "take"           # book moved against us during latency: "take" the worse price or "skip"
 max_slippage = 0.02             # order limit = signal ask + this; never pays more
@@ -113,7 +114,14 @@ status_interval_s = 60          # one-line status in `run` mode
 # (same delay as the main wallet, same start time as the others).
 enabled = true
 latencies_ms = [0, 50, 300]
-starting_bankroll = 1000.0
+starting_bankroll = 100000.0
+# "Near-certain side": late in each window, buy the side whose best ask is between
+# these prices (no model; tests whether the crowd overprices long shots). Check it
+# against your own recordings first: python -m polybot backtest
+near_certain = true
+near_certain_min_price = 0.95
+near_certain_max_price = 0.97
+near_certain_last_fraction = 0.15   # final 15% of a window (2m15s of a 15m market, 45s of a 5m one)
 
 [recorder]
 interval_s = 1.0                # spot + order-book snapshot for replay

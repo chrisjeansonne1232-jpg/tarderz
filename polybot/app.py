@@ -171,6 +171,13 @@ class App:
                     eng.since = self.db.wallet_since(name, now)
                     eng.reconcile_on_start()
                     self.whatif.append(eng)
+                if cfg.whatif.near_certain:
+                    name = "whatif-nearcertain"
+                    eng = PaperEngine(self, wallet=name, starting_bankroll=cfg.whatif.starting_bankroll,
+                                      strategy="near_certain")
+                    eng.since = self.db.wallet_since(name, now)
+                    eng.reconcile_on_start()
+                    self.whatif.append(eng)
         self.dashboard = None
         if self.dashboard_enabled:
             from .dashboard.server import DashboardServer
@@ -274,7 +281,10 @@ class App:
         for eng in self.whatif:
             st = eng.stats(now)
             out.append({
-                "wallet": eng.wallet, "latency_ms": eng.latency_ms, "since": eng.since,
+                "wallet": eng.wallet, "latency_ms": eng.latency_ms, "since": eng.since, "strategy": eng.strategy,
+                "label": (f"fav {100 * self.cfg.whatif.near_certain_min_price:.0f}–"
+                          f"{100 * self.cfg.whatif.near_certain_max_price:.0f}¢" if eng.strategy == "near_certain"
+                          else f"{eng.latency_ms:.0f} ms"),
                 "starting": eng.starting, "trades": st["trades"], "settled": st["settled"], "wins": st["wins"],
                 "open": st["open_count"], "net_pnl": st["net_pnl"], "zero_fee_pnl": st["zero_fee_pnl"],
                 "fees": st["fees_all"], "windows": st["by_window"]["n"],

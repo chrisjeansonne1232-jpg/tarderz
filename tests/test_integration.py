@@ -166,12 +166,19 @@ def test_end_to_end_against_fake_exchange(tmp_path, capsys):
     assert rows and any(int(r["checked"]) > 0 for r in rows)
     # Latency what-if wallets: separate books, each filling after its own delay.
     assert all(t.wallet == "main" for t in app.engine.trades)
-    assert [e.wallet for e in app.whatif] == ["whatif-0ms", "whatif-50ms", "whatif-300ms"]
-    for eng in app.whatif:
+    assert [e.wallet for e in app.whatif] == ["whatif-0ms", "whatif-50ms", "whatif-300ms", "whatif-nearcertain"]
+    # near-certain wallet: only buys at 95-97c, only in the final 15% of a window, never above the signal price
+    for avg, sig_ask, ts_sig, end, start in db.execute(
+        "SELECT t.avg_price, t.signal_ask, t.ts_signal, m.end_ts, m.start_ts FROM trades t JOIN markets m ON m.slug = t.slug "
+        "WHERE t.wallet = 'whatif-nearcertain'"
+    ):
+        assert 0.95 - 1e-9 <= sig_ask <= 0.97 + 1e-9 and avg <= sig_ask + 1e-9
+        assert end - ts_sig <= 0.15 * (end - start) + 1e-6
+    for eng in app.whatif[:3]:
         rows = db.execute("SELECT latency_ms, status FROM trades WHERE wallet = ?", (eng.wallet,)).fetchall()
         assert rows, eng.wallet
         assert all(lat < eng.latency_ms + 60 for lat, _ in rows) and all(lat >= eng.latency_ms - 1 for lat, _ in rows)
-        assert eng.cash() > 0 and eng.starting == 1000.0
+        assert eng.cash() > 0 and eng.starting == app.cfg.whatif.starting_bankroll
     assert db.execute("SELECT COUNT(*) FROM exec_log WHERE msg LIKE '%whatif%'").fetchone()[0] == 0  # quiet
     # The Coinbase-Chainlink basis converges to the fake's true offset (+3.00).
     assert abs(app.basis.mean - 3.0) < 1.5

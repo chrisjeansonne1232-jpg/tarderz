@@ -339,7 +339,7 @@ body {
         <div class="pb wi" id="an-wi">
           <div class="legend"><span>latency what-if</span><span class="num" id="wi-since"></span></div>
           <table id="wi-tbl">
-            <thead><tr><th>delay</th><th>trades</th><th>win</th><th>net P&amp;L</th><th title="same trades, no fees">0-fee</th><th title="average net P&amp;L per market window, ± its 95% range">$/window ±95%</th></tr></thead>
+            <thead><tr><th>wallet</th><th>trades</th><th>win</th><th>net P&amp;L</th><th title="same trades, no fees">0-fee</th><th title="average net P&amp;L per market window, ± its 95% range">$/window ±95%</th></tr></thead>
             <tbody id="wi-body"></tbody>
           </table>
           <div class="wi-note" id="wi-note"></div>
@@ -624,22 +624,22 @@ function renderWhatIf() {
   const main = S.meta.latency_ms;
   let h = "";
   for (const w of wi) {
-    const ctl = Math.round(w.latency_ms) === Math.round(main);
+    const ctl = w.strategy !== "near_certain" && Math.round(w.latency_ms) === Math.round(main);
     const win = w.settled ? pct(w.wins / w.settled, 0) : "—";
     const half = w.window_ci95 ? (w.window_ci95[1] - w.window_ci95[0]) / 2 : null;
     const pw = w.window_mean == null ? "—" : `<span class="${pnlClass(w.window_mean)}">${signed(w.window_mean, 1)}</span>`
       + (half != null ? `<span class="sub"> ±${half.toFixed(1)}</span>` : "");
     const tip = `${w.trades} trades (${w.open} open) · won ${w.wins}/${w.settled} · ${w.windows} windows`
       + (w.window_ci95 ? ` · per-window 95% range ${ciText(w.window_ci95)}` : "");
-    h += `<tr class="${ctl ? "ctl" : ""}" title="${tip}"><td>${Math.round(w.latency_ms)} ms${ctl ? " ctl" : ""}</td>`
+    h += `<tr class="${ctl ? "ctl" : ""}" title="${tip}"><td>${w.label || Math.round(w.latency_ms) + " ms"}${ctl ? " ctl" : ""}</td>`
       + `<td>${w.trades}</td><td>${win}</td>`
       + `<td class="${pnlClass(w.net_pnl)}">${usd(w.net_pnl, true)}</td><td class="sub">${usd(w.zero_fee_pnl, true)}</td><td>${pw}</td></tr>`;
   }
   if (body._h !== h) { body.innerHTML = h; body._h = h; }
   const since = wi[0].since;
   setText($("wi-since"), since ? "since " + hms(since).slice(0, 5) : "");
-  setText($("wi-note"), `Main wallet's rules, filled after each delay · $${price(wi[0].starting, 0)} each · ctl = main's delay. `
-    + `Speed matters only if a faster row beats ctl with its range above 0.`);
+  setText($("wi-note"), `ms rows: main wallet's rules, filled after each delay (ctl = main's delay). fav = near-certain side: buys the favourite late, no model. `
+    + `$${price(wi[0].starting, 0)} each. A row only shows an edge if its range stays above 0.`);
 }
 
 function tagCounts() { return S.logCounts || {}; }  // all-time, from the bot's database

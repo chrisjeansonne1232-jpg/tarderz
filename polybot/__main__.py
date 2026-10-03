@@ -133,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("report", help="print paper-trading performance from the database")
     p_win = sub.add_parser("windows", help="list recent market windows: start/end prices, how they were captured, outcome")
     p_win.add_argument("-n", type=int, default=20, help="how many windows (default 20)")
+    sub.add_parser("backtest", help="replay the near-certain-side strategy on this bot's recorded order books")
     p_arc = sub.add_parser("archive", help="write the daily CSV archive now (the bot also does this every 15 min)")
     p_arc.add_argument("--day", help="only this day, YYYY-MM-DD (in dashboard.timezone)")
     p_arc.add_argument("--all", action="store_true", help="rewrite every day, not just today, yesterday and missing days")
@@ -150,6 +151,8 @@ def main(argv: list[str] | None = None) -> int:
         return report(cfg)
     if args.cmd == "windows":
         return windows(cfg, args.n)
+    if args.cmd == "backtest":
+        return backtest(cfg)
     if args.cmd == "archive":
         return archive(cfg, args.day, args.all)
     if getattr(args, "host", None):
@@ -199,6 +202,9 @@ def report(cfg: Config) -> int:
             ts = [t for t in ts if common is None or t["ts_signal"] >= common]
             ms = w.removeprefix("whatif-")
             ctl = " (control)" if ms == f"{cfg.sim.latency_ms:g}ms" else ""
+            if ms == "nearcertain":
+                ms = (f"near-certain {100 * cfg.whatif.near_certain_min_price:.0f}-"
+                      f"{100 * cfg.whatif.near_certain_max_price:.0f}c")
             rows.append({"label": f"{ms}{ctl}", "stats": summarize(ts, cfg.whatif.starting_bankroll, cfg.dashboard.timezone, now)})
         main = [t for t in trades if common is None or t["ts_signal"] >= common]
         rows.append({"label": f"main wallet ({cfg.sim.latency_ms:g}ms)",
@@ -220,6 +226,26 @@ def report(cfg: Config) -> int:
     else:
         print(f"  S0 check               {s0['matched']}/{s0['compared']} windows within $0.50 of Polymarket's price to beat"
               + (f" (median gap ${s0['median_abs_diff']:.2f}, max ${s0['max_abs_diff']:.2f})" if s0["compared"] else ""))
+    return 0
+
+
+def backtest(cfg: Config) -> int:
+    from .backtest import run_favorite_backtest
+
+    if not Path(cfg.general.db_path).exists():
+        print(f"no database at {cfg.general.db_path}; run `python -m polybot run` first", file=sys.stderr)
+        return 1
+    print("replaying recorded order books (this can take a minute)...", flush=True)
+    text = run_favorite_backtest(cfg.general.db_path, cfg.sim.max_trade_usd, cfg.sim.max_window_usd,
+                                 cfg.strategy.min_seconds_remaining, cfg.sim.liquidity_memory_s, cfg.dashboard.timezone)
+    print(text)
+    out = Path(cfg.archive.dir) / "backtest_near_certain.txt"
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text + "\n", encoding="utf-8-sig")
+        print(f"\nsaved to {out.resolve()}")
+    except OSError as e:
+        print(f"(could not save a copy: {e})")
     return 0
 
 

@@ -145,7 +145,7 @@ class SimConfig:
     # ("run<N>", still in `report` and the archive) and the wallet begins
     # again at starting_bankroll. The what-if wallets restart with it.
     run: int = 1
-    starting_bankroll: float = 1000.0
+    starting_bankroll: float = 100000.0
     latency_ms: float = 300.0  # signal -> fill delay; fill uses the book as it is after the delay
     adverse_move: str = "take"  # book moved against us during latency: "take" the worse price or "skip"
     max_slippage: float = 0.02  # never pay more than signal ask + this per share (the order's limit)
@@ -169,7 +169,13 @@ class WhatIfConfig:
     enabled: bool = True
     # Extra paper wallets that take the same signals with these order delays.
     latencies_ms: list[int] = field(default_factory=lambda: [0, 50, 300])
-    starting_bankroll: float = 1000.0  # large, so running out of cash never cuts a comparison short
+    starting_bankroll: float = 100000.0  # large, so running out of cash never cuts a comparison short
+    # "Near-certain side" wallet: late in a window, buy the side whose best ask is in
+    # [near_certain_min_price, near_certain_max_price] (no model; bets on the long-shot bias).
+    near_certain: bool = True
+    near_certain_min_price: float = 0.95
+    near_certain_max_price: float = 0.97
+    near_certain_last_fraction: float = 0.15
 
 
 @dataclass
@@ -289,6 +295,9 @@ def validate(cfg: Config) -> None:
     lat = cfg.whatif.latencies_ms
     if any(v < 0 or v > 60_000 for v in lat) or len(set(lat)) != len(lat) or len(lat) > 8:
         raise ConfigError("whatif.latencies_ms: up to 8 distinct values between 0 and 60000")
+    w = cfg.whatif
+    if not (0 < w.near_certain_min_price <= w.near_certain_max_price < 1) or not (0 < w.near_certain_last_fraction <= 1):
+        raise ConfigError("whatif.near_certain_*: need 0 < min_price <= max_price < 1 and 0 < last_fraction <= 1")
     if cfg.whatif.starting_bankroll <= 0:
         raise ConfigError("whatif.starting_bankroll must be > 0")
     if cfg.archive.interval_min <= 0 or not cfg.archive.dir:

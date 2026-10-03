@@ -202,7 +202,7 @@ class PaperEngine:
     quiet (their trades go to the database only) and don't count skips."""
 
     def __init__(self, app: "App", wallet: str = "main", latency_ms: float | None = None,
-                 starting_bankroll: float | None = None) -> None:
+                 starting_bankroll: float | None = None, strategy: str = "fair_value") -> None:
         self.app = app
         self.cfg = app.cfg
         self.db = app.db
@@ -211,6 +211,7 @@ class PaperEngine:
         self.latency_ms = self.cfg.sim.latency_ms if latency_ms is None else float(latency_ms)
         self._starting = self.cfg.sim.starting_bankroll if starting_bankroll is None else starting_bankroll
         self.since: float | None = None  # what-if wallets: when this wallet first ran
+        self.strategy = strategy  # "fair_value" (the model) or "near_certain" (see _evaluate_near_certain)
         self.trades: list[Trade] = [Trade.from_row(r) for r in self.db.all_trades(wallet)]
         self.pending: dict[int, _Pending] = {}  # signal id -> reserved order in flight
         self._inflight: set[tuple[str, str]] = set()
@@ -285,6 +286,9 @@ class PaperEngine:
         for tracker in self.app.trackers:
             w = tracker.current(now)
             if w is None or not w.rules_ok or w.fee is None:
+                continue
+            if self.strategy == "near_certain":
+                self._evaluate_near_certain(w, now)
                 continue
             fv, _ = self.app.fair_value(w, now)
             if fv is None:
@@ -376,21 +380,68 @@ class PaperEngine:
 
         # A real signal: reserve the cash and send the (paper) order.
         counts[(w.slug, side, "signal")] += 1
+        self._send(record, w, f"{label} {shares:g} sh @ ask {ask:.2f} · fair {fair:.3f} · edge {cents(edge_after_fee)} after fee"
+                              f" · net {cents(net_edge)} > {cents(st.safety_buffer)}")
+
+    def _send(self, record: dict[str, Any], w: "MarketWindow", msg: str) -> None:
+        """Reserve the cash and send the paper order; it fills after the latency."""
         record.update(decision="pending", reason=None, wallet=self.wallet)
         sid = self.db.insert_signal(record)
         self.signals_taken += 1
-        self.pending[sid] = _Pending(sid, w.slug, side, record["usd"])
-        self._inflight.add(key)
-        self._log(
-            "SIG",
-            f"{label} {shares:g} sh @ ask {ask:.2f} · fair {fair:.3f} · edge {cents(edge_after_fee)} after fee"
-            f" · net {cents(net_edge)} > {cents(st.safety_buffer)} · sending ({self.latency_ms:.0f}ms)",
-            ref=f"sig:{sid}",
-        )
+        self.pending[sid] = _Pending(sid, w.slug, record["side"], record["usd"])
+        self._inflight.add((w.slug, record["side"]))
+        self._log("SIG", f"{msg} · sending ({self.latency_ms:.0f}ms)", ref=f"sig:{sid}")
         self._publish_signal(sid, record)
-        task = asyncio.get_running_loop().create_task(self._execute(sid, record, w, fv))
+        task = asyncio.get_running_loop().create_task(self._execute(sid, record, w, None))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    def _evaluate_near_certain(self, w: "MarketWindow", now: float) -> None:
+        """Late in the window, buy the side whose best ask is in [min_price, max_price].
+        No model: it tests whether the crowd overprices long shots (so the favourite
+        wins more often than its price says). Same fill rules as every wallet, but
+        the order's limit is the signal price itself (never pays up)."""
+        wc, sim = self.cfg.whatif, self.cfg.sim
+        tau = w.end_ts - now
+        if tau < self.cfg.strategy.min_seconds_remaining or tau > wc.near_certain_last_fraction * (w.end_ts - w.start_ts):
+            return
+        fee = w.fee
+        assert fee is not None
+        coll = self.cfg.fees.buy_fee_in == "collateral"
+        for side in ("Up", "Down"):
+            token = w.up_token if side == "Up" else w.down_token
+            book = self.app.channel.books.get(token)
+            if book is None or not book.ready or (w.slug, side) in self._inflight:
+                continue
+            best = book.best_ask()
+            if best is None or not (wc.near_certain_min_price - 1e-9 <= best[0] <= wc.near_certain_max_price + 1e-9):
+                continue
+            ask, ask_size = best
+            budget = min(sim.max_trade_usd, sim.max_window_usd - self.window_spent(w.slug), self.cash())
+            if budget < ask:
+                continue
+            fee_ask = fee.fee_per_share(ask)
+            fills = walk_asks(book.view().asks, max_shares=floor2(budget / (ask + (fee_ask if coll else 0.0))),
+                              limit_price=ask, budget=budget, fee=fee, fee_in_collateral=coll,
+                              hidden=self._hidden_for(token, now))
+            shares = sum(s for _, s, _ in fills)
+            if shares < max(w.min_order_size, 0.01):
+                continue
+            vwap = sum(p * s for p, s, _ in fills) / shares
+            fee_ps = sum(f for _, _, f in fills) / shares
+            fv, _ = self.app.fair_value(w, now)
+            record = {
+                "ts": now, "slug": w.slug, "series": w.series, "side": side, "token": token, "tau": tau,
+                "spot": fv.spot if fv else None, "s0": fv.strike if fv else None,
+                "sigma_annual": annualize(fv.sigma) if fv else None,
+                # no model here: "fair" is the market's own price, so the recorded edge is just -fee
+                "fair": ask, "best_ask": ask, "best_ask_size": ask_size, "vwap": vwap, "fee_ps": fee_ps,
+                "edge_gross": 0.0, "edge_after_fee": -fee_ask, "slippage": vwap - ask, "net_edge": -fee_ps,
+                "threshold": wc.near_certain_min_price, "shares": shares,
+                "usd": sum(p * s for p, s, _ in fills) + (sum(f for _, _, f in fills) if coll else 0.0),
+                "limit": ask,
+            }
+            self._send(record, w, f"near-certain {side.upper()} {w.series} {shares:g} sh @ {ask:.2f}")
 
     def _hidden_for(self, token: str, now: float) -> dict[float, float]:
         ttl = self.cfg.sim.liquidity_memory_s
@@ -402,7 +453,7 @@ class PaperEngine:
         return out
 
     # --- fills ---------------------------------------------------------------------------------
-    async def _execute(self, sid: int, sig: dict[str, Any], w: "MarketWindow", fv: "FairValue") -> None:
+    async def _execute(self, sid: int, sig: dict[str, Any], w: "MarketWindow", fv: "FairValue | None") -> None:
         key = (w.slug, sig["side"])
         try:
             await asyncio.sleep(self.latency_ms / 1000.0)
@@ -436,7 +487,7 @@ class PaperEngine:
             return self._skip_fill(sid, sig, f"ask moved {sig['best_ask']:.2f}→{asks[0][0]:.2f} during {lat:.0f}ms")
         assert w.fee is not None
         coll = self.cfg.fees.buy_fee_in == "collateral"
-        limit = sig["best_ask"] + sim.max_slippage
+        limit = sig.get("limit", sig["best_ask"] + sim.max_slippage)
         fills = walk_asks(
             asks, max_shares=sig["shares"], limit_price=limit, budget=sig["usd"] + 1e-9,
             fee=w.fee, fee_in_collateral=coll, hidden=self._hidden_for(sig["token"], now),
