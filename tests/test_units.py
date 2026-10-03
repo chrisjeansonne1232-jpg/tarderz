@@ -461,3 +461,16 @@ def test_past_run_trades_settle_when_their_market_resolves(tmp_path):
             if st != "PENDING"}
     assert rows == {"run1": ("WON", round(10 - 4.168, 3)), "run1/whatif-0ms": ("LOST", -4.168)}
     assert db.conn.execute("SELECT status FROM trades WHERE wallet='main'").fetchone()[0] == "PENDING"
+
+
+def test_only_one_bot_per_data_folder(tmp_path):
+    from polybot import __main__ as cli
+
+    cfg = Config()
+    cfg.general.db_path = str(tmp_path / "data" / "paperbot.sqlite")
+    assert cli.single_instance(cfg) is True
+    held = cli._LOCK_FILE
+    assert cli.single_instance(cfg) is False  # a second copy sees the first one
+    held.close()  # first copy exits: the OS drops the lock
+    assert cli.single_instance(cfg) is True
+    cli._LOCK_FILE.close()

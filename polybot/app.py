@@ -85,6 +85,7 @@ class App:
         self.candles = CandleBuilder()
         self.engine = None
         self.whatif: list = []  # latency what-if wallets (PaperEngine), run mode only
+        self.failure: str | None = None  # set when a component died (the process then exits non-zero)
         self.loop_lag_ms = 0.0
         self.loop_lag_max_ms = 0.0
         self.db: Database | None = None
@@ -215,6 +216,7 @@ class App:
                 if t is not stop_task:
                     exc = t.exception()
                     log.critical("component %s exited unexpectedly: %r", tasks[t], exc)
+                    self.failure = self.failure or (str(exc) or tasks[t])
                     assert self.db is not None
                     self.db.log_event("CRITICAL", "component_died", None, f"{tasks[t]}: {exc!r}")
             self.stop.set()

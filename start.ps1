@@ -128,4 +128,4 @@ if ($Ipad) {
 }
 Say "starting paper trading - press Ctrl+C to stop (keep this window open)"
 & $vpy @botArgs
-if ($LASTEXITCODE -ne 0 -and $onWindows) { Read-Host "polybot stopped with an error (see above). Press Enter to close" | Out-Null }
+if ($LASTEXITCODE -ne 0 -and $onWindows) { Read-Host "polybot stopped (see the message above). Press Enter to close this window" | Out-Null }

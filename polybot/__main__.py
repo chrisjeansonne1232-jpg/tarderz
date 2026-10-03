@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import signal
 import sys
 import time
@@ -50,7 +51,7 @@ def keep_awake() -> None:
         ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
 
 
-async def run_app(cfg: Config, mode: str, dashboard: bool = False, open_browser: bool = False) -> None:
+async def run_app(cfg: Config, mode: str, dashboard: bool = False, open_browser: bool = False) -> str | None:
     app = App(cfg, mode, dashboard=dashboard, open_browser=open_browser)
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -59,6 +60,34 @@ async def run_app(cfg: Config, mode: str, dashboard: bool = False, open_browser:
         except (NotImplementedError, RuntimeError):
             pass  # Windows: Ctrl+C raises KeyboardInterrupt instead
     await app.run()
+    return app.failure
+
+
+_LOCK_FILE = None  # held open for the life of the process
+
+
+def single_instance(cfg: Config) -> bool:
+    """True if no other polybot is using this data folder. The OS releases the
+    lock when the process ends, even after a crash."""
+    global _LOCK_FILE
+    path = Path(cfg.general.db_path).parent / "polybot.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    f = open(path, "a+")
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return False
+    _LOCK_FILE = f
+    return True
 
 
 async def discover(cfg: Config) -> None:
@@ -161,11 +190,30 @@ def main(argv: list[str] | None = None) -> int:
         cfg.dashboard.dashboard_port = args.port
     setup_logging(cfg, console_level="WARNING")
     print(f"polybot v{__version__} ({args.cmd}; paper only, never places orders)", flush=True)
+    if not single_instance(cfg):
+        url = f"http://127.0.0.1:{cfg.dashboard.dashboard_port}"
+        print("\nPolybot is ALREADY RUNNING in another window, so this one won't start.")
+        print(f"  Its dashboard: {url}")
+        print("  To update or restart it: go to that window, press Ctrl+C, then double-click Polybot again.")
+        if args.dashboard and args.open:
+            import webbrowser
+
+            webbrowser.open(url)
+            print("  (opened that dashboard in your browser)")
+        return 3
     keep_awake()
+    failure = None
     try:
-        asyncio.run(run_app(cfg, args.cmd, dashboard=args.dashboard, open_browser=args.open and args.dashboard))
+        failure = asyncio.run(run_app(cfg, args.cmd, dashboard=args.dashboard, open_browser=args.open and args.dashboard))
     except KeyboardInterrupt:
         pass
+    if failure:
+        print(f"\npolybot stopped because part of it failed: {failure}", file=sys.stderr)
+        if "cannot listen" in failure:
+            print(f"Something else is using port {cfg.dashboard.dashboard_port}: usually an older Polybot window that "
+                  "is still open. Close every Polybot window (or restart the computer), then double-click Polybot again.",
+                  file=sys.stderr)
+        return 1
     return 0
 
 
